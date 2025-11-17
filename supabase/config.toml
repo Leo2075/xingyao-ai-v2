@@ -1,0 +1,61 @@
+project_id = "zopkskdrfgspslrjyini"
+api_url = "https://zopkskdrfgspslrjyini.supabase.co"
+db_url = "postgresql://postgres.zopkskdrfgspslrjyini:fC2xN1JfW3Xq2G4p@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres"
+studio_url = "https://studio.supabase.com/project/zopkskdrfgspslrjyini"
+inbucket_url = "http://127.0.0.1:54324"
+storage_url = "https://zopkskdrfgspslrjyini.supabase.co/storage/v1"
+anon_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpvcGtza2RyZmdzcHNscmp5aW5pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMxODgyNTYsImV4cCI6MjA3ODc2NDI1Nn0.8RDTIgYr_xcdkMVObZuaDWqg1ylfEPaidvmqP-l3yPE"
+service_role_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpvcGtza2RyZmdzcHNscmp5aW5pIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MzE4ODI1NiwiZXhwIjoyMDc4NzY0MjU2fQ.06s9KFbsxy7g1gjblBAjvQ7R1nscEPH5JIQ3seUSXxQ"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+
+[db.pooler]
+enabled = true
+port = 54329
+pool_mode = "transaction"
+default_pool_size = 20
+
+[studio]
+enabled = true
+port = 54323
+api_url = "https://zopkskdrfgspslrjyini.supabase.co"
+openapi_url = "https://zopkskdrfgspslrjyini.supabase.co/rest/v1"
+
+[inbucket]
+enabled = true
+port = 54324
+smtp_port = 54325
+pop3_port = 54326
+
+[storage]
+enabled = true
+port = 54327
+file_size_limit = "50MiB"
+
+[auth]
+enabled = true
+port = 54328
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["https://localhost:3000"]
+email_invite_smtp_url = "http://127.0.0.1:54325"
+email_otp_smtp_url = "http://127.0.0.1:54325"
+
+[auth.email]
+enable_signup = true
+enable_email_confirmations = false
+enable_email_change_confirmations = false
+
+[auth.sms]
+enable_signup = true
+enable_phone_confirmations = false
+
+[edge_functions]
+enabled = true
