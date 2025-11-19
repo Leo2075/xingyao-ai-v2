@@ -20,6 +20,7 @@ import {
   Menu,
   X,
   ChevronLeft,
+  ChevronRight,
   Plus,
   LogOut,
   Pencil
