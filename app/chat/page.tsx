@@ -18,7 +18,8 @@ import {
   X,
   ChevronLeft,
   Plus,
-  LogOut
+  LogOut,
+  Pencil
 } from 'lucide-react'
 
 const iconMap: { [key: string]: any } = {
@@ -44,6 +45,10 @@ function ChatPageContent() {
   const [advancedInputs, setAdvancedInputs] = useState<Record<string, any>>({})
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true)
   const [middleSidebarOpen, setMiddleSidebarOpen] = useState(true)
+  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false)
+  const [showPendingModal, setShowPendingModal] = useState(false)
+  const [editingConversationId, setEditingConversationId] = useState<string>('')
+  const [editingName, setEditingName] = useState<string>('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -57,10 +62,28 @@ function ChatPageContent() {
       return
     }
     setUser(JSON.parse(userData))
+    const storedLeftOpen = localStorage.getItem('chat_left_open')
+    const storedLeftCollapsed = localStorage.getItem('chat_left_collapsed')
+    if (storedLeftOpen !== null) setLeftSidebarOpen(storedLeftOpen === '1')
+    if (storedLeftCollapsed !== null) setLeftSidebarCollapsed(storedLeftCollapsed === '1')
     
     // 获取助手列表
     fetchAssistants()
   }, [router])
+
+  useEffect(() => {
+    localStorage.setItem('chat_left_open', leftSidebarOpen ? '1' : '0')
+  }, [leftSidebarOpen])
+
+  useEffect(() => {
+    localStorage.setItem('chat_left_collapsed', leftSidebarCollapsed ? '1' : '0')
+  }, [leftSidebarCollapsed])
+
+  useEffect(() => {
+    if (!showPendingModal) return
+    const t = setTimeout(() => setShowPendingModal(false), 30000)
+    return () => clearTimeout(t)
+  }, [showPendingModal])
 
   useEffect(() => {
     const assistantId = searchParams.get('assistantId')
@@ -179,6 +202,28 @@ function ChatPageContent() {
     setMessages([])
   }
 
+  const renameConversation = async (conversationId: string, name: string) => {
+    if (!currentAssistant || !name.trim()) return
+    const oldConversations = conversations
+    setConversations(prev => prev.map(c => c.id === conversationId ? { ...c, name: name.trim() } as Conversation : c))
+    try {
+      const response = await fetch(`/api/dify/conversations/${conversationId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ assistantId: currentAssistant.id, userId: user?.id, name: name.trim() }),
+      })
+      if (!response.ok) throw new Error('更新失败')
+      await fetchConversations(currentAssistant)
+    } catch (e) {
+      setConversations(oldConversations)
+    } finally {
+      setEditingConversationId('')
+      setEditingName('')
+    }
+  }
+
   const sendMessage = async () => {
     if (!inputMessage.trim() || !currentAssistant || loading) return
 
@@ -192,6 +237,7 @@ function ChatPageContent() {
     setMessages(prev => [...prev, userMessage])
     setInputMessage('')
     setLoading(true)
+    setShowPendingModal(true)
 
     try {
       const response = await fetch('/api/dify/chat', {
@@ -239,6 +285,7 @@ function ChatPageContent() {
               
               if (jsonData.event === 'message') {
                 aiMessage.content += jsonData.answer || ''
+                if (showPendingModal) setShowPendingModal(false)
                 setMessages(prev => {
                   const newMessages = [...prev]
                   newMessages[newMessages.length - 1] = { ...aiMessage }
@@ -268,6 +315,7 @@ function ChatPageContent() {
       }])
     } finally {
       setLoading(false)
+      setShowPendingModal(false)
     }
   }
 
@@ -288,14 +336,19 @@ function ChatPageContent() {
   return (
     <div className="flex h-screen bg-gray-100">
       {/* Left Sidebar - Assistants */}
-      <div className={`${leftSidebarOpen ? 'w-64' : 'w-0'} bg-blue-700 text-white transition-all duration-300 overflow-hidden flex flex-col`}>
+      <div className={`${leftSidebarOpen ? (leftSidebarCollapsed ? 'w-16' : 'w-64') : 'w-0'} bg-blue-700 text-white transition-all duration-300 overflow-hidden flex flex-col`}>
         <div className="p-4 border-b border-blue-600">
-          <h2 className="font-semibold flex items-center justify-between">
-            <span>助手列表</span>
-            <button onClick={() => setLeftSidebarOpen(false)} className="lg:hidden">
-              <X className="w-5 h-5" />
-            </button>
-          </h2>
+          <div className="flex items-center justify-between">
+            <span className="font-semibold">助手列表</span>
+            <div className="flex items-center space-x-2">
+              <button onClick={() => setLeftSidebarCollapsed(!leftSidebarCollapsed)} className="p-2 hover:bg-blue-600 rounded-lg transition-colors">
+                {leftSidebarCollapsed ? <ChevronLeft className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+              </button>
+              <button onClick={() => setLeftSidebarOpen(false)} className="p-2 hover:bg-blue-600 rounded-lg transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto">
@@ -307,12 +360,13 @@ function ChatPageContent() {
               <button
                 key={assistant.id}
                 onClick={() => selectAssistant(assistant)}
-                className={`w-full p-4 flex flex-col items-center text-center space-y-2 hover:bg-blue-600 transition-colors ${
+                className={`w-full ${leftSidebarCollapsed ? 'p-3' : 'p-4'} ${leftSidebarCollapsed ? 'flex items-center justify-center' : 'flex flex-col items-center text-center space-y-2'} hover:bg-blue-600 transition-colors ${
                   isActive ? 'bg-blue-600' : ''
                 }`}
+                title={assistant.name}
               >
                 <Icon className="w-8 h-8" />
-                <span className="text-xs">{assistant.name}</span>
+                {!leftSidebarCollapsed && <span className="text-xs">{assistant.name}</span>}
               </button>
             )
           })}
@@ -352,20 +406,44 @@ function ChatPageContent() {
 
         <div className="flex-1 overflow-y-auto">
           {conversations.map((conv) => (
-            <button
+            <div
               key={conv.id}
-              onClick={() => loadConversation(conv.id)}
-              className={`w-full p-4 text-left hover:bg-gray-50 border-b border-gray-100 transition-colors ${
+              className={`w-full p-4 hover:bg-gray-50 border-b border-gray-100 transition-colors ${
                 currentConversationId === conv.id ? 'bg-blue-50' : ''
               }`}
             >
-              <div className="font-medium text-sm text-gray-900 truncate">
-                {conv.name || '新对话'}
+              <div className="flex items-center justify-between">
+                <button onClick={() => loadConversation(conv.id)} className="text-left flex-1">
+                  <div className="font-medium text-sm text-gray-900 truncate">
+                    {editingConversationId === conv.id ? (
+                      <input
+                        autoFocus
+                        value={editingName}
+                        onChange={(e) => setEditingName(e.target.value)}
+                        onBlur={() => renameConversation(conv.id, editingName)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') renameConversation(conv.id, editingName)
+                          if (e.key === 'Escape') { setEditingConversationId(''); setEditingName('') }
+                        }}
+                        className="w-full px-2 py-1 border border-gray-300 rounded"
+                      />
+                    ) : (
+                      <span>{conv.name || '新对话'}</span>
+                    )}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {new Date(conv.updated_at * 1000).toLocaleString('zh-CN')}
+                  </div>
+                </button>
+                <button
+                  className="p-2 hover:bg-gray-100 rounded-lg ml-2"
+                  title="重命名"
+                  onClick={() => { setEditingConversationId(conv.id); setEditingName(conv.name || '') }}
+                >
+                  <Pencil className="w-4 h-4 text-gray-600" />
+                </button>
               </div>
-              <div className="text-xs text-gray-500 mt-1">
-                {new Date(conv.updated_at * 1000).toLocaleString('zh-CN')}
-              </div>
-            </button>
+            </div>
           ))}
 
           {conversations.length === 0 && (
@@ -383,10 +461,18 @@ function ChatPageContent() {
           <div className="flex items-center space-x-4">
             <button
               onClick={() => setLeftSidebarOpen(!leftSidebarOpen)}
-              className="p-2 hover:bg-gray-100 rounded-lg transition-colors lg:hidden"
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
             >
               <Menu className="w-5 h-5" />
             </button>
+            {leftSidebarOpen && (
+              <button
+                onClick={() => setLeftSidebarCollapsed(!leftSidebarCollapsed)}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                {leftSidebarCollapsed ? <ChevronLeft className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5 rotate-180" />}
+              </button>
+            )}
 
             <button
               onClick={() => router.push('/assistants')}
@@ -415,6 +501,14 @@ function ChatPageContent() {
 
         {/* Messages Area */}
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          {showPendingModal && (
+            <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30">
+              <div className="bg-white rounded-xl shadow-lg p-6 flex items-center space-x-4">
+                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary"></div>
+                <div className="text-sm text-gray-700">正在等待助手回复…</div>
+              </div>
+            </div>
+          )}
           {!currentAssistant ? (
             <div className="flex items-center justify-center h-full">
               <div className="text-center text-gray-500">
