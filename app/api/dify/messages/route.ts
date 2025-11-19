@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     const bearerKey = (keyRef && process.env[keyRef]) || assistant.dify_api_key
     const difyUrl = `${assistant.dify_base_url}/messages`
     const difyResponse = await fetch(
-      `${difyUrl}?conversation_id=${conversationId}&user=${userId ? `user-${userId}` : 'user-anon'}&limit=50`,
+      `${difyUrl}?conversation_id=${conversationId}&user=${userId ? `user-${userId}` : 'user-anon'}&limit=5`,
       {
         method: 'GET',
         headers: {

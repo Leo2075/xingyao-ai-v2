@@ -136,6 +136,7 @@ function ChatPageContent() {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [currentConversationId, setCurrentConversationId] = useState<string>('')
   const [messages, setMessages] = useState<Message[]>([])
+  const [cachedMessages, setCachedMessages] = useState<Map<string, Message[]>>(new Map())
   const [inputMessage, setInputMessage] = useState('')
   const [loading, setLoading] = useState(false)
   const [advancedInputs, setAdvancedInputs] = useState<Record<string, any>>({})
@@ -286,6 +287,7 @@ function ChatPageContent() {
   }
 
   const selectAssistant = async (assistant: Assistant) => {
+    activeStreamRef.current = null
     setCurrentAssistant(assistant)
     setMessages([])
     setCurrentConversationId('')
@@ -331,6 +333,7 @@ function ChatPageContent() {
   }
 
   const loadConversation = async (conversationId: string) => {
+    activeStreamRef.current = null
     if (!currentAssistant) return
 
     if (isTemporaryConversation(conversationId)) {
@@ -340,6 +343,13 @@ function ChatPageContent() {
     }
 
     setCurrentConversationId(conversationId)
+    const cached = cachedMessages.get(conversationId)
+    if (cached && cached.length > 0) {
+      setMessages(cached)
+      setAssistantTyping(false)
+    } else {
+      setMessages([])
+    }
     setLoading(true)
 
     try {
@@ -357,8 +367,13 @@ function ChatPageContent() {
 
       const data = await response.json()
       if (response.ok && data.messages) {
-        const normalized = data.messages.map(normalizeMessage)
-        setMessages(sortMessages(normalized))
+        const normalized = sortMessages(data.messages.map(normalizeMessage))
+        setCachedMessages(prev => {
+          const next = new Map(prev)
+          next.set(conversationId, normalized)
+          return next
+        })
+        setMessages(normalized)
       }
     } catch (error) {
       console.error('获取对话历史失败:', error)
@@ -368,6 +383,7 @@ function ChatPageContent() {
   }
 
   const startNewConversation = () => {
+    activeStreamRef.current = null
     const timestamp = Math.floor(Date.now() / 1000)
     const tempConversation: Conversation = {
       id: `temp-${Date.now()}`,
@@ -424,6 +440,13 @@ function ChatPageContent() {
     }
 
     setMessages(prev => sortMessages([...prev, userMessage]))
+    setCachedMessages(prev => {
+      const next = new Map(prev)
+      const key = conversationIdForRequest || 'new'
+      const existing = next.get(key) || []
+      next.set(key, sortMessages([...existing, userMessage]))
+      return next
+    })
     setInputMessage('')
     setLoading(true)
     setAssistantTyping(true)
@@ -466,6 +489,22 @@ function ChatPageContent() {
             updated[index] = { ...aiMessage }
           }
           return sortMessages(updated)
+        })
+        setCachedMessages(prev => {
+          const next = new Map(prev)
+          const key = currentConversationId && !isTemporaryConversation(currentConversationId)
+            ? currentConversationId
+            : 'new'
+          const existing = next.get(key) || []
+          const idx = existing.findIndex(msg => msg.id === aiMessage.id)
+          if (idx === -1) {
+            next.set(key, sortMessages([...existing, aiMessage]))
+          } else {
+            const copy = [...existing]
+            copy[idx] = { ...aiMessage }
+            next.set(key, sortMessages(copy))
+          }
+          return next
         })
       }
 
