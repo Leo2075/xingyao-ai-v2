@@ -23,7 +23,7 @@ import {
   ChevronRight,
   Plus,
   LogOut,
-  Pencil
+  MoreHorizontal
 } from 'lucide-react'
 
 const iconMap: { [key: string]: any } = {
@@ -36,6 +36,11 @@ const iconMap: { [key: string]: any } = {
   'bar-chart': BarChart3,
   'users': Users,
   'dollar-sign': DollarSign,
+}
+
+type ConversationCacheEntry = {
+  messages: Message[]
+  cursor: number | null
 }
 
 const toSeconds = (value: any) => {
@@ -136,7 +141,8 @@ function ChatPageContent() {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [currentConversationId, setCurrentConversationId] = useState<string>('')
   const [messages, setMessages] = useState<Message[]>([])
-  const [cachedMessages, setCachedMessages] = useState<Map<string, Message[]>>(new Map())
+  const [conversationCache, setConversationCache] = useState<Map<string, ConversationCacheEntry>>(new Map())
+  const [currentCursorRounds, setCurrentCursorRounds] = useState<number | null>(null)
   const [inputMessage, setInputMessage] = useState('')
   const [loading, setLoading] = useState(false)
   const [advancedInputs, setAdvancedInputs] = useState<Record<string, any>>({})
@@ -149,14 +155,34 @@ function ChatPageContent() {
   const [assistantTyping, setAssistantTyping] = useState(false)
   const [editingConversationId, setEditingConversationId] = useState<string>('')
   const [editingName, setEditingName] = useState<string>('')
+  const [actionMenuId, setActionMenuId] = useState<string>('')
   const leftResizeState = useRef({ startX: 0, startWidth: 260 })
   const middleResizeState = useRef({ startX: 0, startWidth: 320 })
-  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const loadingMoreRef = useRef(false)
+  const scrollIntentRef = useRef<ScrollBehavior | null>(null)
+  const currentConversationIdRef = useRef<string>('')
   const activeStreamRef = useRef<{ id: string; assistantId: string } | null>(null)
   const router = useRouter()
   const searchParams = useSearchParams()
   const [user, setUser] = useState<any>(null)
   const isTemporaryConversation = (id?: string) => Boolean(id && id.startsWith('temp-'))
+
+  const requestScrollToBottom = (behavior: ScrollBehavior = 'auto') => {
+    scrollIntentRef.current = behavior
+  }
+
+  const scrollToBottom = (behavior: ScrollBehavior = 'auto') => {
+    requestAnimationFrame(() => {
+      const container = messagesContainerRef.current
+      if (!container) return
+      if (behavior === 'auto') {
+        container.scrollTop = container.scrollHeight
+      } else {
+        container.scrollTo({ top: container.scrollHeight, behavior })
+      }
+    })
+  }
 
   useEffect(() => {
     // 检查登录状态
@@ -206,8 +232,20 @@ function ChatPageContent() {
   }, [searchParams, assistants])
 
   useEffect(() => {
-    scrollToBottom()
+    if (!scrollIntentRef.current) return
+    scrollToBottom(scrollIntentRef.current)
+    scrollIntentRef.current = null
   }, [messages])
+
+  useEffect(() => {
+    currentConversationIdRef.current = currentConversationId
+  }, [currentConversationId])
+
+  useEffect(() => {
+    const handleDocumentClick = () => setActionMenuId('')
+    document.addEventListener('click', handleDocumentClick)
+    return () => document.removeEventListener('click', handleDocumentClick)
+  }, [])
 
   useEffect(() => {
     const handleMouseMove = (event: MouseEvent) => {
@@ -332,26 +370,13 @@ function ChatPageContent() {
     }
   }
 
-  const loadConversation = async (conversationId: string) => {
-    activeStreamRef.current = null
+  const fetchConversationMessages = async (
+    conversationId: string,
+    cursorRounds = 0,
+    mode: 'replace' | 'prepend' = 'replace',
+    scrollSnapshot?: { height: number; top: number },
+  ) => {
     if (!currentAssistant) return
-
-    if (isTemporaryConversation(conversationId)) {
-      setCurrentConversationId(conversationId)
-      setMessages([])
-      return
-    }
-
-    setCurrentConversationId(conversationId)
-    const cached = cachedMessages.get(conversationId)
-    if (cached && cached.length > 0) {
-      setMessages(cached)
-      setAssistantTyping(false)
-    } else {
-      setMessages([])
-    }
-    setLoading(true)
-
     try {
       const response = await fetch('/api/dify/messages', {
         method: 'POST',
@@ -362,24 +387,68 @@ function ChatPageContent() {
           assistantId: currentAssistant.id,
           conversationId,
           userId: user?.id,
+          cursorRounds,
+          rounds: 3,
         }),
       })
 
       const data = await response.json()
       if (response.ok && data.messages) {
         const normalized = sortMessages(data.messages.map(normalizeMessage))
-        setCachedMessages(prev => {
+
+        setConversationCache(prev => {
           const next = new Map(prev)
-          next.set(conversationId, normalized)
+          const existing = next.get(conversationId)
+          const combined =
+            mode === 'prepend' && existing
+              ? sortMessages([...normalized, ...existing.messages])
+              : normalized
+          next.set(conversationId, { messages: combined, cursor: data.nextCursorRounds ?? null })
           return next
         })
-        setMessages(normalized)
+
+        if (currentConversationIdRef.current === conversationId) {
+          setMessages(prev => (mode === 'prepend' ? sortMessages([...normalized, ...prev]) : normalized))
+          setCurrentCursorRounds(data.nextCursorRounds ?? null)
+
+          if (mode === 'replace') {
+            requestScrollToBottom('auto')
+          } else if (scrollSnapshot) {
+            requestAnimationFrame(() => {
+              const container = messagesContainerRef.current
+              if (!container) return
+              const diff = container.scrollHeight - scrollSnapshot.height
+              container.scrollTop = scrollSnapshot.top + diff
+            })
+          }
+        }
       }
     } catch (error) {
       console.error('获取对话历史失败:', error)
-    } finally {
-      setLoading(false)
     }
+  }
+
+  const loadConversation = async (conversationId: string) => {
+    activeStreamRef.current = null
+    if (!currentAssistant) return
+
+    setCurrentConversationId(conversationId)
+    const cached = conversationCache.get(conversationId)
+    if (cached) {
+      setMessages(cached.messages)
+      setCurrentCursorRounds(cached.cursor)
+      setAssistantTyping(false)
+      requestScrollToBottom('auto')
+    } else {
+      setMessages([])
+      setCurrentCursorRounds(null)
+    }
+
+    if (isTemporaryConversation(conversationId)) return
+
+    setLoading(true)
+    await fetchConversationMessages(conversationId, 0, 'replace')
+    setLoading(false)
   }
 
   const startNewConversation = () => {
@@ -394,6 +463,13 @@ function ChatPageContent() {
     setConversations(prev => [tempConversation, ...prev.filter(conv => !isTemporaryConversation(conv.id))])
     setCurrentConversationId(tempConversation.id)
     setMessages([])
+    setCurrentCursorRounds(null)
+    setConversationCache(prev => {
+      const next = new Map(prev)
+      next.set(tempConversation.id, { messages: [], cursor: null })
+      return next
+    })
+    requestScrollToBottom('auto')
   }
 
   const renameConversation = async (conversationId: string, name: string) => {
@@ -415,12 +491,79 @@ function ChatPageContent() {
     } finally {
       setEditingConversationId('')
       setEditingName('')
+      setActionMenuId('')
+    }
+  }
+
+  const deleteConversation = async (conversationId: string) => {
+    const previousConversations = conversations
+    const previousCache = conversationCache.get(conversationId)
+    setConversations(prev => prev.filter(c => c.id !== conversationId))
+    setConversationCache(prev => {
+      const next = new Map(prev)
+      next.delete(conversationId)
+      return next
+    })
+
+    if (currentConversationId === conversationId) {
+      setCurrentConversationId('')
+      setMessages([])
+      setCurrentCursorRounds(null)
+      requestScrollToBottom('auto')
+    }
+
+    if (!currentAssistant || isTemporaryConversation(conversationId)) {
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/dify/conversations/${conversationId}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ assistantId: currentAssistant.id, userId: user?.id }),
+      })
+      if (!response.ok) throw new Error('删除失败')
+      await fetchConversations(currentAssistant)
+    } catch (error) {
+      console.error('删除对话失败:', error)
+      setConversations(previousConversations)
+      if (previousCache) {
+        setConversationCache(prev => {
+          const next = new Map(prev)
+          next.set(conversationId, previousCache)
+          return next
+        })
+      }
+    } finally {
+      setActionMenuId('')
     }
   }
 
   const sendMessage = async () => {
     if (!inputMessage.trim() || !currentAssistant || loading) return
 
+    let conversationKey = currentConversationId
+    if (!conversationKey) {
+      const timestamp = Math.floor(Date.now() / 1000)
+      conversationKey = `temp-${Date.now()}`
+      const tempConversation: Conversation = {
+        id: conversationKey,
+        name: '新的对话',
+        created_at: timestamp,
+        updated_at: timestamp,
+      }
+      setConversations(prev => [tempConversation, ...prev.filter(conv => conv.id !== conversationKey)])
+      setCurrentConversationId(conversationKey)
+      setConversationCache(prev => {
+        const next = new Map(prev)
+        next.set(conversationKey, { messages: [], cursor: null })
+        return next
+      })
+    }
+
+    const sessionConversationKey = conversationKey
     const assistantSnapshot = currentAssistant
     const sessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const currentSession = { id: sessionId, assistantId: assistantSnapshot.id }
@@ -428,8 +571,8 @@ function ChatPageContent() {
     const isActiveSession = () =>
       activeStreamRef.current?.id === currentSession.id &&
       activeStreamRef.current?.assistantId === currentSession.assistantId
-    const conversationIdForRequest = currentConversationId && !isTemporaryConversation(currentConversationId)
-      ? currentConversationId
+    const conversationIdForRequest = conversationKey && !isTemporaryConversation(conversationKey)
+      ? conversationKey
       : undefined
 
     const userMessage: Message = {
@@ -440,13 +583,13 @@ function ChatPageContent() {
     }
 
     setMessages(prev => sortMessages([...prev, userMessage]))
-    setCachedMessages(prev => {
+        setConversationCache(prev => {
       const next = new Map(prev)
-      const key = conversationIdForRequest || 'new'
-      const existing = next.get(key) || []
-      next.set(key, sortMessages([...existing, userMessage]))
+          const existing = next.get(sessionConversationKey) || { messages: [], cursor: null }
+          next.set(sessionConversationKey, { ...existing, messages: sortMessages([...existing.messages, userMessage]) })
       return next
     })
+    requestScrollToBottom('auto')
     setInputMessage('')
     setLoading(true)
     setAssistantTyping(true)
@@ -490,61 +633,76 @@ function ChatPageContent() {
           }
           return sortMessages(updated)
         })
-        setCachedMessages(prev => {
+        setConversationCache(prev => {
           const next = new Map(prev)
-          const key = currentConversationId && !isTemporaryConversation(currentConversationId)
-            ? currentConversationId
-            : 'new'
-          const existing = next.get(key) || []
-          const idx = existing.findIndex(msg => msg.id === aiMessage.id)
+          const existing = next.get(sessionConversationKey) || { messages: [], cursor: null }
+          const idx = existing.messages.findIndex(msg => msg.id === aiMessage.id)
           if (idx === -1) {
-            next.set(key, sortMessages([...existing, aiMessage]))
+            next.set(sessionConversationKey, {
+              ...existing,
+              messages: sortMessages([...existing.messages, aiMessage]),
+            })
           } else {
-            const copy = [...existing]
+            const copy = [...existing.messages]
             copy[idx] = { ...aiMessage }
-            next.set(key, sortMessages(copy))
+            next.set(sessionConversationKey, { ...existing, messages: sortMessages(copy) })
           }
           return next
         })
+        requestScrollToBottom('smooth')
       }
 
       updateAssistantMessage()
 
       const handleMessageEnd = async (payload: any) => {
-        if (!isActiveSession() || !payload?.conversation_id || !assistantSnapshot) return
+        if (!payload?.conversation_id || !assistantSnapshot) return
         const resolvedName = payload.conversation_name || payload.conversation?.name || '新的对话'
-        setCurrentConversationId((prevId) => {
-          if (prevId && !isTemporaryConversation(prevId)) {
-            return prevId
+        setConversationCache(prev => {
+          const next = new Map(prev)
+          if (isTemporaryConversation(sessionConversationKey) && next.has(sessionConversationKey)) {
+            const entry = next.get(sessionConversationKey)!
+            next.set(payload.conversation_id, entry)
+            next.delete(sessionConversationKey)
           }
-          setConversations((prev) => {
-            let updatedList = prev.map((conv) => {
-              if (prevId && isTemporaryConversation(prevId) && conv.id === prevId) {
-                return {
-                  ...conv,
-                  id: payload.conversation_id,
-                  name: resolvedName,
-                  updated_at: toSeconds(Date.now()),
-                }
-              }
-              return conv
-            })
-            if (!prevId) {
-              updatedList = [
-                ...updatedList,
-                {
-                  id: payload.conversation_id,
-                  name: resolvedName,
-                  created_at: toSeconds(Date.now()),
-                  updated_at: toSeconds(Date.now()),
-                },
-              ]
-            }
-            return sortConversationsWithTemp(updatedList, isTemporaryConversation)
-          })
-          return payload.conversation_id
+          return next
         })
-        await fetchConversations(assistantSnapshot)
+
+        if (isActiveSession()) {
+          setCurrentConversationId((prevId) => {
+            if (prevId && !isTemporaryConversation(prevId)) {
+              return prevId
+            }
+            setConversations((prev) => {
+              let updatedList = prev.map((conv) => {
+                if (prevId && isTemporaryConversation(prevId) && conv.id === prevId) {
+                  return {
+                    ...conv,
+                    id: payload.conversation_id,
+                    name: resolvedName,
+                    updated_at: toSeconds(Date.now()),
+                  }
+                }
+                return conv
+              })
+              if (!prevId) {
+                updatedList = [
+                  ...updatedList,
+                  {
+                    id: payload.conversation_id,
+                    name: resolvedName,
+                    created_at: toSeconds(Date.now()),
+                    updated_at: toSeconds(Date.now()),
+                  },
+                ]
+              }
+              return sortConversationsWithTemp(updatedList, isTemporaryConversation)
+            })
+            return payload.conversation_id
+          })
+          await fetchConversations(assistantSnapshot)
+        } else {
+          await fetchConversations(assistantSnapshot)
+        }
       }
 
       const processChunk = async (chunk: string) => {
@@ -589,20 +747,45 @@ function ChatPageContent() {
       }
     } catch (error) {
       console.error('发送消息失败:', error)
-      setMessages(prev => sortMessages([...prev, {
+      const fallbackMessage: Message = {
         id: Date.now().toString(),
         role: 'assistant',
         content: '抱歉，发送消息时出现错误，请重试。',
         created_at: Date.now(),
-      }]))
+      }
+      setMessages(prev => sortMessages([...prev, fallbackMessage]))
+      setConversationCache(prev => {
+        const next = new Map(prev)
+        const existing = next.get(conversationKey) || { messages: [], cursor: null }
+        next.set(conversationKey, { ...existing, messages: sortMessages([...existing.messages, fallbackMessage]) })
+        return next
+      })
     } finally {
       setLoading(false)
       setAssistantTyping(false)
     }
   }
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  const loadMoreMessages = async () => {
+    if (!currentConversationId) return
+    const cacheEntry = conversationCache.get(currentConversationId)
+    if (!cacheEntry || cacheEntry.cursor == null || loadingMoreRef.current) return
+    const container = messagesContainerRef.current
+    const snapshot = {
+      height: container?.scrollHeight ?? 0,
+      top: container?.scrollTop ?? 0,
+    }
+    loadingMoreRef.current = true
+    await fetchConversationMessages(currentConversationId, cacheEntry.cursor, 'prepend', snapshot)
+    loadingMoreRef.current = false
+  }
+
+  const handleMessagesScroll = () => {
+    const container = messagesContainerRef.current
+    if (!container || loadingMoreRef.current) return
+    if (container.scrollTop <= 40) {
+      loadMoreMessages()
+    }
   }
 
   const handleLogout = () => {
@@ -741,14 +924,36 @@ function ChatPageContent() {
                         {new Date(conv.updated_at * 1000).toLocaleString('zh-CN')}
                       </div>
                     </button>
-                    <button
-                      className={`p-2 rounded-lg ml-2 ${isTemp ? 'text-gray-300 cursor-not-allowed' : 'hover:bg-gray-100 text-gray-600'}`}
-                      disabled={isTemp}
-                      title="重命名"
-                      onClick={() => { setEditingConversationId(conv.id); setEditingName(conv.name || '') }}
-                    >
-                      <Pencil className={`w-4 h-4 ${isTemp ? 'text-gray-300' : 'text-gray-600'}`} />
-                    </button>
+                    <div className="relative ml-2" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        className="p-2 hover:bg-gray-100 rounded-lg"
+                        onClick={() => setActionMenuId(prev => (prev === conv.id ? '' : conv.id))}
+                      >
+                        <MoreHorizontal className="w-4 h-4 text-gray-600" />
+                      </button>
+                      {actionMenuId === conv.id && (
+                        <div className="absolute right-0 mt-2 w-32 rounded-lg border border-gray-200 bg-white shadow-lg z-10">
+                          <button
+                            className={`w-full px-4 py-2 text-left text-sm ${isTemp ? 'text-gray-300 cursor-not-allowed' : 'hover:bg-gray-50 text-gray-700'}`}
+                            disabled={isTemp}
+                            onClick={() => {
+                              if (isTemp) return
+                              setEditingConversationId(conv.id)
+                              setEditingName(conv.name || '')
+                              setActionMenuId('')
+                            }}
+                          >
+                            重命名
+                          </button>
+                          <button
+                            className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                            onClick={() => deleteConversation(conv.id)}
+                          >
+                            删除会话
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               )})}
@@ -796,7 +1001,11 @@ function ChatPageContent() {
         </div>
 
         {/* Messages Area */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+        <div
+          ref={messagesContainerRef}
+          onScroll={handleMessagesScroll}
+          className="flex-1 overflow-y-auto p-6 space-y-4"
+        >
           {!currentAssistant ? (
             <div className="flex items-center justify-center h-full">
               <div className="text-center text-gray-500">
@@ -857,7 +1066,6 @@ function ChatPageContent() {
               )}
             </>
           )}
-          <div ref={messagesEndRef} />
         </div>
 
         {/* Input Area */}
