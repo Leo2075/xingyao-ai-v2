@@ -22,15 +22,15 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     const keyRef = (assistant as any).key_ref as string | undefined
     const bearerKey = (keyRef && process.env[keyRef]) || assistant.dify_api_key
     const userValue = userId ? `user-${userId}` : 'user-anon'
-    const difyUrl = `${assistant.dify_base_url}/conversations/${conversationId}?user=${encodeURIComponent(userValue)}`
+    const difyUrl = `${assistant.dify_base_url}/conversations/${conversationId}/name`
 
     const difyResponse = await fetch(difyUrl, {
-      method: 'PATCH',
+      method: 'POST',
       headers: {
         Authorization: `Bearer ${bearerKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ name: name.trim() }),
+      body: JSON.stringify({ name: name.trim(), user: userValue }),
     })
 
     if (!difyResponse.ok) {

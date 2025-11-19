@@ -17,8 +17,9 @@ import {
   Users,
   DollarSign,
   Send,
+  Menu,
+  X,
   ChevronLeft,
-  ChevronRight,
   Plus,
   LogOut,
   Pencil
@@ -102,6 +103,7 @@ function ChatPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [user, setUser] = useState<any>(null)
+  const isTemporaryConversation = (id?: string) => Boolean(id && id.startsWith('temp-'))
 
   useEffect(() => {
     // 检查登录状态
@@ -267,6 +269,12 @@ function ChatPageContent() {
   const loadConversation = async (conversationId: string) => {
     if (!currentAssistant) return
 
+    if (isTemporaryConversation(conversationId)) {
+      setCurrentConversationId(conversationId)
+      setMessages([])
+      return
+    }
+
     setCurrentConversationId(conversationId)
     setLoading(true)
 
@@ -295,12 +303,20 @@ function ChatPageContent() {
   }
 
   const startNewConversation = () => {
-    setCurrentConversationId('')
+    const timestamp = Math.floor(Date.now() / 1000)
+    const tempConversation: Conversation = {
+      id: `temp-${Date.now()}`,
+      name: '新的对话',
+      created_at: timestamp,
+      updated_at: timestamp,
+    }
+    setConversations(prev => [tempConversation, ...prev.filter(conv => !isTemporaryConversation(conv.id))])
+    setCurrentConversationId(tempConversation.id)
     setMessages([])
   }
 
   const renameConversation = async (conversationId: string, name: string) => {
-    if (!currentAssistant || !name.trim()) return
+    if (!currentAssistant || !name.trim() || isTemporaryConversation(conversationId)) return
     const oldConversations = conversations.map((c) => ({ ...c }))
     setConversations(prev => prev.map(c => c.id === conversationId ? { ...c, name: name.trim() } as Conversation : c))
     try {
@@ -324,6 +340,10 @@ function ChatPageContent() {
   const sendMessage = async () => {
     if (!inputMessage.trim() || !currentAssistant || loading) return
 
+    const conversationIdForRequest = currentConversationId && !isTemporaryConversation(currentConversationId)
+      ? currentConversationId
+      : undefined
+
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
@@ -345,7 +365,7 @@ function ChatPageContent() {
         body: JSON.stringify({
           assistantId: currentAssistant.id,
           message: inputMessage,
-          conversationId: currentConversationId || undefined,
+          conversationId: conversationIdForRequest || undefined,
           userId: user?.id,
           inputs: advancedInputs,
         }),
@@ -391,8 +411,23 @@ function ChatPageContent() {
               }
 
               if (jsonData.event === 'message_end') {
-                if (jsonData.conversation_id && !currentConversationId) {
-                  setCurrentConversationId(jsonData.conversation_id)
+                if (jsonData.conversation_id) {
+                  const resolvedName = jsonData.conversation_name || jsonData.conversation?.name || '新的对话'
+                  const prevId = currentConversationId
+                  if (!prevId || isTemporaryConversation(prevId)) {
+                    setConversations(prev => prev.map(conv => {
+                      if (prevId && isTemporaryConversation(prevId) && conv.id === prevId) {
+                        return {
+                          ...conv,
+                          id: jsonData.conversation_id,
+                          name: resolvedName,
+                          updated_at: Math.floor(Date.now() / 1000),
+                        }
+                      }
+                      return conv
+                    }))
+                    setCurrentConversationId(jsonData.conversation_id)
+                  }
                   await fetchConversations(currentAssistant)
                 }
               }
@@ -524,7 +559,9 @@ function ChatPageContent() {
 
           {!middleSidebarCollapsed ? (
             <div className="flex-1 overflow-y-auto">
-              {conversations.map((conv) => (
+              {conversations.map((conv) => {
+                const isTemp = isTemporaryConversation(conv.id)
+                return (
                 <div
                   key={conv.id}
                   className={`w-full p-4 hover:bg-gray-50 border-b border-gray-100 transition-colors ${
@@ -547,7 +584,7 @@ function ChatPageContent() {
                             className="w-full px-2 py-1 border border-gray-300 rounded"
                           />
                         ) : (
-                          <span>{conv.name || '新对话'}</span>
+                          <span>{isTemp ? '新的对话' : (conv.name || '新的对话')}</span>
                         )}
                       </div>
                       <div className="text-xs text-gray-500 mt-1">
@@ -555,15 +592,16 @@ function ChatPageContent() {
                       </div>
                     </button>
                     <button
-                      className="p-2 hover:bg-gray-100 rounded-lg ml-2"
+                      className={`p-2 rounded-lg ml-2 ${isTemp ? 'text-gray-300 cursor-not-allowed' : 'hover:bg-gray-100 text-gray-600'}`}
+                      disabled={isTemp}
                       title="重命名"
                       onClick={() => { setEditingConversationId(conv.id); setEditingName(conv.name || '') }}
                     >
-                      <Pencil className="w-4 h-4 text-gray-600" />
+                      <Pencil className={`w-4 h-4 ${isTemp ? 'text-gray-300' : 'text-gray-600'}`} />
                     </button>
                   </div>
                 </div>
-              ))}
+              )})}
 
               {conversations.length === 0 && (
                 <div className="p-8 text-center text-gray-500 text-sm">
