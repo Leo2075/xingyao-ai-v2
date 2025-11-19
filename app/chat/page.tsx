@@ -38,6 +38,56 @@ const iconMap: { [key: string]: any } = {
   'dollar-sign': DollarSign,
 }
 
+const toSeconds = (value: any) => {
+  if (typeof value === 'number') {
+    return value > 1e12 ? Math.floor(value / 1000) : value
+  }
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value)
+    return Number.isNaN(parsed) ? Math.floor(Date.now() / 1000) : Math.floor(parsed / 1000)
+  }
+  return Math.floor(Date.now() / 1000)
+}
+
+const toMillis = (value: any) => {
+  if (typeof value === 'number') {
+    return value > 1e12 ? value : value * 1000
+  }
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value)
+    return Number.isNaN(parsed) ? Date.now() : parsed
+  }
+  return Date.now()
+}
+
+const normalizeConversation = (item: any): Conversation => ({
+  id: item.id,
+  name: item.name || '新的对话',
+  created_at: toSeconds(item.created_at),
+  updated_at: toSeconds(item.updated_at ?? item.created_at),
+})
+
+const normalizeMessage = (item: Message | any): Message => ({
+  id: item.id || `${item.message_id || Date.now()}`,
+  role: item.role || 'assistant',
+  content: item.content || item.answer || item.query || '',
+  created_at: toMillis(item.created_at ?? Date.now()),
+})
+
+const sortMessages = (items: Message[]) =>
+  [...items].sort((a, b) => a.created_at - b.created_at)
+
+const sortConversationsWithTemp = (
+  items: Conversation[],
+  isTemp: (id?: string) => boolean
+) => {
+  const temps = items.filter((item) => isTemp(item.id))
+  const normals = items
+    .filter((item) => !isTemp(item.id))
+    .sort((a, b) => b.updated_at - a.updated_at)
+  return [...temps, ...normals]
+}
+
 const markdownComponents: Components = {
   code({ inline, className, children, ...props }: any) {
     if (!inline) {
@@ -101,6 +151,7 @@ function ChatPageContent() {
   const leftResizeState = useRef({ startX: 0, startWidth: 260 })
   const middleResizeState = useRef({ startX: 0, startWidth: 320 })
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const activeStreamRef = useRef<{ id: string; assistantId: string } | null>(null)
   const router = useRouter()
   const searchParams = useSearchParams()
   const [user, setUser] = useState<any>(null)
@@ -260,7 +311,19 @@ function ChatPageContent() {
 
       const data = await response.json()
       if (response.ok && data.conversations) {
-        setConversations(data.conversations)
+        const normalized: Conversation[] = data.conversations
+          .map(normalizeConversation)
+          .filter((item: Conversation) => Boolean(item.id))
+        setConversations((prev) => {
+          const temps = prev.filter((item) => isTemporaryConversation(item.id))
+          const combined = [...temps, ...normalized]
+          const dedupedMap = new Map<string, Conversation>()
+          combined.forEach((conv) => {
+            if (!conv.id) return
+            dedupedMap.set(conv.id, conv)
+          })
+          return sortConversationsWithTemp(Array.from(dedupedMap.values()), isTemporaryConversation)
+        })
       }
     } catch (error) {
       console.error('获取对话列表失败:', error)
@@ -294,7 +357,8 @@ function ChatPageContent() {
 
       const data = await response.json()
       if (response.ok && data.messages) {
-        setMessages(data.messages)
+        const normalized = data.messages.map(normalizeMessage)
+        setMessages(sortMessages(normalized))
       }
     } catch (error) {
       console.error('获取对话历史失败:', error)
@@ -341,6 +405,13 @@ function ChatPageContent() {
   const sendMessage = async () => {
     if (!inputMessage.trim() || !currentAssistant || loading) return
 
+    const assistantSnapshot = currentAssistant
+    const sessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const currentSession = { id: sessionId, assistantId: assistantSnapshot.id }
+    activeStreamRef.current = currentSession
+    const isActiveSession = () =>
+      activeStreamRef.current?.id === currentSession.id &&
+      activeStreamRef.current?.assistantId === currentSession.assistantId
     const conversationIdForRequest = currentConversationId && !isTemporaryConversation(currentConversationId)
       ? currentConversationId
       : undefined
@@ -352,7 +423,7 @@ function ChatPageContent() {
       created_at: Date.now(),
     }
 
-    setMessages(prev => [...prev, userMessage])
+    setMessages(prev => sortMessages([...prev, userMessage]))
     setInputMessage('')
     setLoading(true)
     setAssistantTyping(true)
@@ -376,9 +447,6 @@ function ChatPageContent() {
         throw new Error('发送消息失败')
       }
 
-      const reader = response.body?.getReader()
-      if (!reader) throw new Error('无法读取响应流')
-
       const decoder = new TextDecoder()
       let aiMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -387,65 +455,107 @@ function ChatPageContent() {
         created_at: Date.now(),
       }
 
-      setMessages(prev => [...prev, aiMessage])
+      const updateAssistantMessage = () => {
+        if (!isActiveSession()) return
+        setMessages(prev => {
+          const updated = [...prev]
+          const index = updated.findIndex((msg) => msg.id === aiMessage.id)
+          if (index === -1) {
+            updated.push(aiMessage)
+          } else {
+            updated[index] = { ...aiMessage }
+          }
+          return sortMessages(updated)
+        })
+      }
+
+      updateAssistantMessage()
+
+      const handleMessageEnd = async (payload: any) => {
+        if (!isActiveSession() || !payload?.conversation_id || !assistantSnapshot) return
+        const resolvedName = payload.conversation_name || payload.conversation?.name || '新的对话'
+        setCurrentConversationId((prevId) => {
+          if (prevId && !isTemporaryConversation(prevId)) {
+            return prevId
+          }
+          setConversations((prev) => {
+            let updatedList = prev.map((conv) => {
+              if (prevId && isTemporaryConversation(prevId) && conv.id === prevId) {
+                return {
+                  ...conv,
+                  id: payload.conversation_id,
+                  name: resolvedName,
+                  updated_at: toSeconds(Date.now()),
+                }
+              }
+              return conv
+            })
+            if (!prevId) {
+              updatedList = [
+                ...updatedList,
+                {
+                  id: payload.conversation_id,
+                  name: resolvedName,
+                  created_at: toSeconds(Date.now()),
+                  updated_at: toSeconds(Date.now()),
+                },
+              ]
+            }
+            return sortConversationsWithTemp(updatedList, isTemporaryConversation)
+          })
+          return payload.conversation_id
+        })
+        await fetchConversations(assistantSnapshot)
+      }
+
+      const processChunk = async (chunk: string) => {
+        if (!isActiveSession()) return
+        const lines = chunk.split('\n')
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const payload = line.slice(6)
+          if (!payload || payload === '[DONE]') continue
+          try {
+            const jsonData = JSON.parse(payload)
+            if (jsonData.event === 'message') {
+              aiMessage.content += jsonData.answer || ''
+              setAssistantTyping(false)
+              updateAssistantMessage()
+            }
+            if (jsonData.event === 'message_end') {
+              await handleMessageEnd(jsonData)
+            }
+          } catch (e) {
+            // ignore malformed chunk
+          }
+        }
+      }
+
+      const reader = response.body?.getReader()
+      if (!reader) {
+        const fallbackText = await response.text()
+        if (fallbackText) {
+          await processChunk(fallbackText)
+        } else {
+          throw new Error('无法读取响应流')
+        }
+        return
+      }
 
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-
-        const chunk = decoder.decode(value)
-        const lines = chunk.split('\n')
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const jsonData = JSON.parse(line.slice(6))
-              
-              if (jsonData.event === 'message') {
-                aiMessage.content += jsonData.answer || ''
-                if (assistantTyping) setAssistantTyping(false)
-                setMessages(prev => {
-                  const newMessages = [...prev]
-                  newMessages[newMessages.length - 1] = { ...aiMessage }
-                  return newMessages
-                })
-              }
-
-              if (jsonData.event === 'message_end') {
-                if (jsonData.conversation_id) {
-                  const resolvedName = jsonData.conversation_name || jsonData.conversation?.name || '新的对话'
-                  const prevId = currentConversationId
-                  if (!prevId || isTemporaryConversation(prevId)) {
-                    setConversations(prev => prev.map(conv => {
-                      if (prevId && isTemporaryConversation(prevId) && conv.id === prevId) {
-                        return {
-                          ...conv,
-                          id: jsonData.conversation_id,
-                          name: resolvedName,
-                          updated_at: Math.floor(Date.now() / 1000),
-                        }
-                      }
-                      return conv
-                    }))
-                    setCurrentConversationId(jsonData.conversation_id)
-                  }
-                  await fetchConversations(currentAssistant)
-                }
-              }
-            } catch (e) {
-              // 忽略解析错误
-            }
-          }
-        }
+        const chunk = decoder.decode(value, { stream: true })
+        await processChunk(chunk)
       }
     } catch (error) {
       console.error('发送消息失败:', error)
-      setMessages(prev => [...prev, {
+      setMessages(prev => sortMessages([...prev, {
         id: Date.now().toString(),
         role: 'assistant',
         content: '抱歉，发送消息时出现错误，请重试。',
         created_at: Date.now(),
-      }])
+      }]))
     } finally {
       setLoading(false)
       setAssistantTyping(false)
