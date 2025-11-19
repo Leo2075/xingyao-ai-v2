@@ -3,6 +3,9 @@
 import { useEffect, useState, useRef, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Assistant, Message, Conversation } from '@/lib/types'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import type { Components } from 'react-markdown'
 import {
   Brain,
   Video,
@@ -32,6 +35,48 @@ const iconMap: { [key: string]: any } = {
   'bar-chart': BarChart3,
   'users': Users,
   'dollar-sign': DollarSign,
+}
+
+const markdownComponents: Components = {
+  code({ inline, className, children, ...props }: any) {
+    if (!inline) {
+      return (
+        <pre className="bg-gray-900 text-gray-100 rounded-xl p-4 overflow-x-auto text-sm my-4">
+          <code className={className} {...props}>
+            {children}
+          </code>
+        </pre>
+      )
+    }
+    return (
+      <code className="bg-gray-100 text-gray-900 rounded px-1 py-0.5" {...props}>
+        {children}
+      </code>
+    )
+  },
+  table({ children }) {
+    return (
+      <div className="overflow-x-auto my-4">
+        <table className="w-full border border-gray-200 text-sm">
+          {children}
+        </table>
+      </div>
+    )
+  },
+  th({ children }) {
+    return (
+      <th className="border border-gray-200 bg-gray-50 px-3 py-2 text-left font-semibold text-gray-800">
+        {children}
+      </th>
+    )
+  },
+  td({ children }) {
+    return (
+      <td className="border border-gray-200 px-3 py-2 align-top text-gray-700">
+        {children}
+      </td>
+    )
+  },
 }
 
 function ChatPageContent() {
@@ -537,9 +582,20 @@ function ChatPageContent() {
                       : 'bg-white border border-gray-200 text-gray-900'
                   }`}
                 >
-                  <div className="whitespace-pre-wrap break-words">
-                    {message.content}
-                  </div>
+                  {message.role === 'assistant' ? (
+                    <div className="markdown-body text-gray-900">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={markdownComponents}
+                      >
+                        {message.content || ''}
+                      </ReactMarkdown>
+                    </div>
+                  ) : (
+                    <div className="whitespace-pre-wrap break-words">
+                      {message.content}
+                    </div>
+                  )}
                 </div>
               </div>
             ))
