@@ -92,6 +92,8 @@ const INPUT_LABELS: Record<string, string> = {
   user: '用户信息',
 }
 
+const CONVERSATION_CACHE_TTL = 60 * 1000 // 60秒
+
 const markdownComponents: Components = {
   code({ inline, className, children, ...props }: any) {
     if (!inline) {
@@ -156,6 +158,7 @@ function ChatPageContent() {
   const [editingConversationId, setEditingConversationId] = useState<string>('')
   const [editingName, setEditingName] = useState<string>('')
   const [actionMenuId, setActionMenuId] = useState<string>('')
+  const conversationCacheRef = useRef<Map<string, { data: Conversation[]; updatedAt: number }>>(new Map())
   const leftResizeState = useRef({ startX: 0, startWidth: 260 })
   const middleResizeState = useRef({ startX: 0, startWidth: 320 })
   const messagesContainerRef = useRef<HTMLDivElement>(null)
@@ -313,6 +316,43 @@ function ChatPageContent() {
     setIsResizingMiddle(true)
   }
 
+  const getCachedConversations = (assistantId: string) => {
+    const memory = conversationCacheRef.current.get(assistantId)
+    const now = Date.now()
+    if (memory && now - memory.updatedAt < CONVERSATION_CACHE_TTL) {
+      return memory.data
+    }
+    if (typeof window !== 'undefined') {
+      const key = `conv_cache_${assistantId}`
+      const raw = localStorage.getItem(key)
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw)
+          if (parsed?.data && parsed?.updatedAt && now - parsed.updatedAt < CONVERSATION_CACHE_TTL) {
+            conversationCacheRef.current.set(assistantId, parsed)
+            return parsed.data as Conversation[]
+          }
+        } catch (error) {
+          console.warn('解析会话缓存失败', error)
+        }
+      }
+    }
+    return null
+  }
+
+  const saveConversationCache = (assistantId: string, data: Conversation[]) => {
+    const payload = { data, updatedAt: Date.now() }
+    conversationCacheRef.current.set(assistantId, payload)
+    if (typeof window !== 'undefined') {
+      const key = `conv_cache_${assistantId}`
+      try {
+        localStorage.setItem(key, JSON.stringify(payload))
+      } catch (error) {
+        console.warn('保存会话缓存失败', error)
+      }
+    }
+  }
+
   const getPresetInputs = (assistant: Assistant) => {
     const name = assistant.name || ''
     if (name === '原创选题文案策划') {
@@ -346,8 +386,18 @@ function ChatPageContent() {
     setCurrentConversationId('')
     const preset = getPresetInputs(assistant)
     setAdvancedInputs(preset)
-    
-    // 获取该助手的对话历史列表
+
+    const cached = getCachedConversations(assistant.id)
+    if (cached && cached.length > 0) {
+      setConversations(prev => {
+        const temps = prev.filter(c => isTemporaryConversation(c.id))
+        const merged = sortConversationsWithTemp([...temps, ...cached], isTemporaryConversation)
+        return merged
+      })
+    } else {
+      setConversations(prev => prev.filter(c => isTemporaryConversation(c.id)))
+    }
+
     await fetchConversations(assistant)
   }
 
@@ -369,6 +419,7 @@ function ChatPageContent() {
         const normalized: Conversation[] = data.conversations
           .map(normalizeConversation)
           .filter((item: Conversation) => Boolean(item.id))
+        let nextList: Conversation[] = []
         setConversations((prev) => {
           const temps = prev.filter((item) => isTemporaryConversation(item.id))
           const combined = [...temps, ...normalized]
@@ -377,8 +428,11 @@ function ChatPageContent() {
             if (!conv.id) return
             dedupedMap.set(conv.id, conv)
           })
-          return sortConversationsWithTemp(Array.from(dedupedMap.values()), isTemporaryConversation)
+          nextList = sortConversationsWithTemp(Array.from(dedupedMap.values()), isTemporaryConversation)
+          return nextList
         })
+        const cacheable = nextList.filter((item) => !isTemporaryConversation(item.id))
+        saveConversationCache(assistant.id, cacheable)
       }
     } catch (error) {
       console.error('获取对话列表失败:', error)
