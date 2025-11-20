@@ -158,6 +158,7 @@ function ChatPageContent() {
   const [editingConversationId, setEditingConversationId] = useState<string>('')
   const [editingName, setEditingName] = useState<string>('')
   const [actionMenuId, setActionMenuId] = useState<string>('')
+  const [conversationsLoading, setConversationsLoading] = useState(false)
   const conversationCacheRef = useRef<Map<string, { data: Conversation[]; updatedAt: number }>>(new Map())
   const leftResizeState = useRef({ startX: 0, startWidth: 260 })
   const middleResizeState = useRef({ startX: 0, startWidth: 320 })
@@ -394,15 +395,18 @@ function ChatPageContent() {
         const merged = sortConversationsWithTemp([...temps, ...cached], isTemporaryConversation)
         return merged
       })
+      setConversationsLoading(false)
     } else {
       setConversations(prev => prev.filter(c => isTemporaryConversation(c.id)))
+      setConversationsLoading(true)
     }
 
-    await fetchConversations(assistant)
+    await fetchConversations(assistant, !cached || cached.length === 0)
   }
 
-  const fetchConversations = async (assistant: Assistant) => {
+  const fetchConversations = async (assistant: Assistant, showLoading = false) => {
     try {
+      if (showLoading) setConversationsLoading(true)
       const response = await fetch('/api/dify/conversations', {
         method: 'POST',
         headers: {
@@ -436,6 +440,8 @@ function ChatPageContent() {
       }
     } catch (error) {
       console.error('获取对话列表失败:', error)
+    } finally {
+      if (showLoading) setConversationsLoading(false)
     }
   }
 
