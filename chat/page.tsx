@@ -23,7 +23,7 @@ import {
   ChevronRight,
   Plus,
   LogOut,
-  Pencil
+  MoreHorizontal
 } from 'lucide-react'
 
 const iconMap: { [key: string]: any } = {
@@ -36,6 +36,61 @@ const iconMap: { [key: string]: any } = {
   'bar-chart': BarChart3,
   'users': Users,
   'dollar-sign': DollarSign,
+}
+
+type ConversationCacheEntry = {
+  messages: Message[]
+  cursor: number | null
+}
+
+const toSeconds = (value: any) => {
+  if (typeof value === 'number') {
+    return value > 1e12 ? Math.floor(value / 1000) : value
+  }
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value)
+    return Number.isNaN(parsed) ? Math.floor(Date.now() / 1000) : Math.floor(parsed / 1000)
+  }
+  return Math.floor(Date.now() / 1000)
+}
+
+const toMillis = (value: any) => {
+  if (typeof value === 'number') {
+    return value > 1e12 ? value : value * 1000
+  }
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value)
+    return Number.isNaN(parsed) ? Date.now() : parsed
+  }
+  return Date.now()
+}
+
+const normalizeConversation = (item: any): Conversation => ({
+  id: item.id,
+  name: item.name || '新的对话',
+  created_at: toSeconds(item.created_at),
+  updated_at: toSeconds(item.updated_at ?? item.created_at),
+})
+
+const normalizeMessage = (item: Message | any): Message => ({
+  id: item.id || `${item.message_id || Date.now()}`,
+  role: item.role || 'assistant',
+  content: item.content || item.answer || item.query || '',
+  created_at: toMillis(item.created_at ?? Date.now()),
+})
+
+const sortMessages = (items: Message[]) =>
+  [...items].sort((a, b) => a.created_at - b.created_at)
+
+const sortConversationsWithTemp = (
+  items: Conversation[],
+  isTemp: (id?: string) => boolean
+) => {
+  const temps = items.filter((item) => isTemp(item.id))
+  const normals = items
+    .filter((item) => !isTemp(item.id))
+    .sort((a, b) => b.updated_at - a.updated_at)
+  return [...temps, ...normals]
 }
 
 const markdownComponents: Components = {
@@ -86,6 +141,8 @@ function ChatPageContent() {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [currentConversationId, setCurrentConversationId] = useState<string>('')
   const [messages, setMessages] = useState<Message[]>([])
+  const [conversationCache, setConversationCache] = useState<Map<string, ConversationCacheEntry>>(new Map())
+  const [currentCursorRounds, setCurrentCursorRounds] = useState<number | null>(null)
   const [inputMessage, setInputMessage] = useState('')
   const [loading, setLoading] = useState(false)
   const [advancedInputs, setAdvancedInputs] = useState<Record<string, any>>({})
@@ -98,13 +155,34 @@ function ChatPageContent() {
   const [assistantTyping, setAssistantTyping] = useState(false)
   const [editingConversationId, setEditingConversationId] = useState<string>('')
   const [editingName, setEditingName] = useState<string>('')
+  const [actionMenuId, setActionMenuId] = useState<string>('')
   const leftResizeState = useRef({ startX: 0, startWidth: 260 })
   const middleResizeState = useRef({ startX: 0, startWidth: 320 })
-  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const loadingMoreRef = useRef(false)
+  const scrollIntentRef = useRef<ScrollBehavior | null>(null)
+  const currentConversationIdRef = useRef<string>('')
+  const activeStreamRef = useRef<{ id: string; assistantId: string } | null>(null)
   const router = useRouter()
   const searchParams = useSearchParams()
   const [user, setUser] = useState<any>(null)
   const isTemporaryConversation = (id?: string) => Boolean(id && id.startsWith('temp-'))
+
+  const requestScrollToBottom = (behavior: ScrollBehavior = 'auto') => {
+    scrollIntentRef.current = behavior
+  }
+
+  const scrollToBottom = (behavior: ScrollBehavior = 'auto') => {
+    requestAnimationFrame(() => {
+      const container = messagesContainerRef.current
+      if (!container) return
+      if (behavior === 'auto') {
+        container.scrollTop = container.scrollHeight
+      } else {
+        container.scrollTo({ top: container.scrollHeight, behavior })
+      }
+    })
+  }
 
   useEffect(() => {
     // 检查登录状态
@@ -154,8 +232,20 @@ function ChatPageContent() {
   }, [searchParams, assistants])
 
   useEffect(() => {
-    scrollToBottom()
+    if (!scrollIntentRef.current) return
+    scrollToBottom(scrollIntentRef.current)
+    scrollIntentRef.current = null
   }, [messages])
+
+  useEffect(() => {
+    currentConversationIdRef.current = currentConversationId
+  }, [currentConversationId])
+
+  useEffect(() => {
+    const handleDocumentClick = () => setActionMenuId('')
+    document.addEventListener('click', handleDocumentClick)
+    return () => document.removeEventListener('click', handleDocumentClick)
+  }, [])
 
   useEffect(() => {
     const handleMouseMove = (event: MouseEvent) => {
@@ -186,6 +276,21 @@ function ChatPageContent() {
       document.removeEventListener('mouseup', handleMouseUp)
     }
   }, [isResizingLeft, isResizingMiddle])
+
+  // 点击外部关闭菜单
+  useEffect(() => {
+    if (!actionMenuId) return
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement
+      if (!target.closest('[data-action-menu]')) {
+        setActionMenuId('')
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [actionMenuId])
 
   const fetchAssistants = async () => {
     try {
@@ -235,6 +340,7 @@ function ChatPageContent() {
   }
 
   const selectAssistant = async (assistant: Assistant) => {
+    activeStreamRef.current = null
     setCurrentAssistant(assistant)
     setMessages([])
     setCurrentConversationId('')
@@ -260,25 +366,32 @@ function ChatPageContent() {
 
       const data = await response.json()
       if (response.ok && data.conversations) {
-        setConversations(data.conversations)
+        const normalized: Conversation[] = data.conversations
+          .map(normalizeConversation)
+          .filter((item: Conversation) => Boolean(item.id))
+        setConversations((prev) => {
+          const temps = prev.filter((item) => isTemporaryConversation(item.id))
+          const combined = [...temps, ...normalized]
+          const dedupedMap = new Map<string, Conversation>()
+          combined.forEach((conv) => {
+            if (!conv.id) return
+            dedupedMap.set(conv.id, conv)
+          })
+          return sortConversationsWithTemp(Array.from(dedupedMap.values()), isTemporaryConversation)
+        })
       }
     } catch (error) {
       console.error('获取对话列表失败:', error)
     }
   }
 
-  const loadConversation = async (conversationId: string) => {
+  const fetchConversationMessages = async (
+    conversationId: string,
+    cursorRounds = 0,
+    mode: 'replace' | 'prepend' = 'replace',
+    scrollSnapshot?: { height: number; top: number },
+  ) => {
     if (!currentAssistant) return
-
-    if (isTemporaryConversation(conversationId)) {
-      setCurrentConversationId(conversationId)
-      setMessages([])
-      return
-    }
-
-    setCurrentConversationId(conversationId)
-    setLoading(true)
-
     try {
       const response = await fetch('/api/dify/messages', {
         method: 'POST',
@@ -289,21 +402,88 @@ function ChatPageContent() {
           assistantId: currentAssistant.id,
           conversationId,
           userId: user?.id,
+          cursorRounds,
+          rounds: 3,
         }),
       })
 
       const data = await response.json()
       if (response.ok && data.messages) {
-        setMessages(data.messages)
+        const normalized = sortMessages(data.messages.map(normalizeMessage))
+
+        setConversationCache(prev => {
+          const next = new Map(prev)
+          const existing = next.get(conversationId)
+          let combined: Message[]
+          if (mode === 'prepend' && existing) {
+            // 合并时去重，避免重复消息
+            const existingIds = new Set(existing.messages.map(m => m.id))
+            const newMessages = normalized.filter(m => !existingIds.has(m.id))
+            combined = sortMessages([...newMessages, ...existing.messages])
+          } else {
+            combined = normalized
+          }
+          next.set(conversationId, { messages: combined, cursor: data.nextCursorRounds ?? null })
+          return next
+        })
+
+        if (currentConversationIdRef.current === conversationId) {
+          if (mode === 'prepend') {
+            setMessages(prev => {
+              const existingIds = new Set(prev.map(m => m.id))
+              const newMessages = normalized.filter(m => !existingIds.has(m.id))
+              return sortMessages([...newMessages, ...prev])
+            })
+          } else {
+            setMessages(normalized)
+          }
+          setCurrentCursorRounds(data.nextCursorRounds ?? null)
+
+          if (mode === 'replace') {
+            requestScrollToBottom('auto')
+          } else if (scrollSnapshot) {
+            requestAnimationFrame(() => {
+              const container = messagesContainerRef.current
+              if (!container) return
+              const diff = container.scrollHeight - scrollSnapshot.height
+              container.scrollTop = scrollSnapshot.top + diff
+            })
+          }
+        }
       }
     } catch (error) {
       console.error('获取对话历史失败:', error)
-    } finally {
-      setLoading(false)
     }
   }
 
+  const loadConversation = async (conversationId: string) => {
+    activeStreamRef.current = null
+    if (!currentAssistant) return
+
+    setCurrentConversationId(conversationId)
+    currentConversationIdRef.current = conversationId
+    
+    const cached = conversationCache.get(conversationId)
+    if (cached) {
+      setMessages(cached.messages)
+      setCurrentCursorRounds(cached.cursor)
+      setAssistantTyping(false)
+      requestScrollToBottom('auto')
+    } else {
+      setMessages([])
+      setCurrentCursorRounds(null)
+    }
+
+    if (isTemporaryConversation(conversationId)) return
+
+    setLoading(true)
+    // 总是刷新最新消息，确保不丢失
+    await fetchConversationMessages(conversationId, 0, 'replace')
+    setLoading(false)
+  }
+
   const startNewConversation = () => {
+    activeStreamRef.current = null
     const timestamp = Math.floor(Date.now() / 1000)
     const tempConversation: Conversation = {
       id: `temp-${Date.now()}`,
@@ -314,6 +494,13 @@ function ChatPageContent() {
     setConversations(prev => [tempConversation, ...prev.filter(conv => !isTemporaryConversation(conv.id))])
     setCurrentConversationId(tempConversation.id)
     setMessages([])
+    setCurrentCursorRounds(null)
+    setConversationCache(prev => {
+      const next = new Map(prev)
+      next.set(tempConversation.id, { messages: [], cursor: null })
+      return next
+    })
+    requestScrollToBottom('auto')
   }
 
   const renameConversation = async (conversationId: string, name: string) => {
@@ -335,14 +522,88 @@ function ChatPageContent() {
     } finally {
       setEditingConversationId('')
       setEditingName('')
+      setActionMenuId('')
+    }
+  }
+
+  const deleteConversation = async (conversationId: string) => {
+    const previousConversations = conversations
+    const previousCache = conversationCache.get(conversationId)
+    setConversations(prev => prev.filter(c => c.id !== conversationId))
+    setConversationCache(prev => {
+      const next = new Map(prev)
+      next.delete(conversationId)
+      return next
+    })
+
+    if (currentConversationId === conversationId) {
+      setCurrentConversationId('')
+      setMessages([])
+      setCurrentCursorRounds(null)
+      requestScrollToBottom('auto')
+    }
+
+    if (!currentAssistant || isTemporaryConversation(conversationId)) {
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/dify/conversations/${conversationId}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ assistantId: currentAssistant.id, userId: user?.id }),
+      })
+      if (!response.ok) throw new Error('删除失败')
+      await fetchConversations(currentAssistant)
+    } catch (error) {
+      console.error('删除对话失败:', error)
+      setConversations(previousConversations)
+      if (previousCache) {
+        setConversationCache(prev => {
+          const next = new Map(prev)
+          next.set(conversationId, previousCache)
+          return next
+        })
+      }
+    } finally {
+      setActionMenuId('')
     }
   }
 
   const sendMessage = async () => {
     if (!inputMessage.trim() || !currentAssistant || loading) return
 
-    const conversationIdForRequest = currentConversationId && !isTemporaryConversation(currentConversationId)
-      ? currentConversationId
+    let conversationKey = currentConversationId
+    if (!conversationKey) {
+      const timestamp = Math.floor(Date.now() / 1000)
+      conversationKey = `temp-${Date.now()}`
+      const tempConversation: Conversation = {
+        id: conversationKey,
+        name: '新的对话',
+        created_at: timestamp,
+        updated_at: timestamp,
+      }
+      setConversations(prev => [tempConversation, ...prev.filter(conv => conv.id !== conversationKey)])
+      setCurrentConversationId(conversationKey)
+      setConversationCache(prev => {
+        const next = new Map(prev)
+        next.set(conversationKey, { messages: [], cursor: null })
+        return next
+      })
+    }
+
+    const sessionConversationKey = conversationKey
+    const assistantSnapshot = currentAssistant
+    const sessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const currentSession = { id: sessionId, assistantId: assistantSnapshot.id }
+    activeStreamRef.current = currentSession
+    const isActiveSession = () =>
+      activeStreamRef.current?.id === currentSession.id &&
+      activeStreamRef.current?.assistantId === currentSession.assistantId
+    const conversationIdForRequest = conversationKey && !isTemporaryConversation(conversationKey)
+      ? conversationKey
       : undefined
 
     const userMessage: Message = {
@@ -352,7 +613,14 @@ function ChatPageContent() {
       created_at: Date.now(),
     }
 
-    setMessages(prev => [...prev, userMessage])
+    setMessages(prev => sortMessages([...prev, userMessage]))
+        setConversationCache(prev => {
+      const next = new Map(prev)
+          const existing = next.get(sessionConversationKey) || { messages: [], cursor: null }
+          next.set(sessionConversationKey, { ...existing, messages: sortMessages([...existing.messages, userMessage]) })
+      return next
+    })
+    requestScrollToBottom('auto')
     setInputMessage('')
     setLoading(true)
     setAssistantTyping(true)
@@ -376,9 +644,6 @@ function ChatPageContent() {
         throw new Error('发送消息失败')
       }
 
-      const reader = response.body?.getReader()
-      if (!reader) throw new Error('无法读取响应流')
-
       const decoder = new TextDecoder()
       let aiMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -387,73 +652,179 @@ function ChatPageContent() {
         created_at: Date.now(),
       }
 
-      setMessages(prev => [...prev, aiMessage])
+      const updateAssistantMessage = () => {
+        // 始终更新缓存，即使不是活跃会话也要保存
+        setConversationCache(prev => {
+          const next = new Map(prev)
+          const existing = next.get(sessionConversationKey) || { messages: [], cursor: null }
+          const idx = existing.messages.findIndex(msg => msg.id === aiMessage.id)
+          if (idx === -1) {
+            next.set(sessionConversationKey, {
+              ...existing,
+              messages: sortMessages([...existing.messages, aiMessage]),
+            })
+          } else {
+            const copy = [...existing.messages]
+            copy[idx] = { ...aiMessage }
+            next.set(sessionConversationKey, { ...existing, messages: sortMessages(copy) })
+          }
+          return next
+        })
+        
+        // 只有活跃会话才更新UI
+        if (isActiveSession()) {
+          setMessages(prev => {
+            const updated = [...prev]
+            const index = updated.findIndex((msg) => msg.id === aiMessage.id)
+            if (index === -1) {
+              updated.push(aiMessage)
+            } else {
+              updated[index] = { ...aiMessage }
+            }
+            return sortMessages(updated)
+          })
+          requestScrollToBottom('smooth')
+        }
+      }
+
+      updateAssistantMessage()
+
+      const handleMessageEnd = async (payload: any) => {
+        if (!payload?.conversation_id || !assistantSnapshot) return
+        const resolvedName = payload.conversation_name || payload.conversation?.name || '新的对话'
+        setConversationCache(prev => {
+          const next = new Map(prev)
+          if (isTemporaryConversation(sessionConversationKey) && next.has(sessionConversationKey)) {
+            const entry = next.get(sessionConversationKey)!
+            next.set(payload.conversation_id, entry)
+            next.delete(sessionConversationKey)
+          }
+          return next
+        })
+
+        // 始终更新会话列表，即使不是活跃会话
+        const shouldUpdateConversation = isTemporaryConversation(sessionConversationKey)
+        if (shouldUpdateConversation || isActiveSession()) {
+          setCurrentConversationId((prevId) => {
+            if (prevId && !isTemporaryConversation(prevId) && !shouldUpdateConversation) {
+              return prevId
+            }
+            setConversations((prev) => {
+              let updatedList = prev.map((conv) => {
+                if (shouldUpdateConversation && conv.id === sessionConversationKey) {
+                  return {
+                    ...conv,
+                    id: payload.conversation_id,
+                    name: resolvedName,
+                    updated_at: toSeconds(Date.now()),
+                  }
+                }
+                return conv
+              })
+              // 如果临时会话不在列表中，添加新会话
+              if (shouldUpdateConversation && !prev.find(c => c.id === sessionConversationKey) && !prev.find(c => c.id === payload.conversation_id)) {
+                updatedList = [
+                  ...updatedList,
+                  {
+                    id: payload.conversation_id,
+                    name: resolvedName,
+                    created_at: toSeconds(Date.now()),
+                    updated_at: toSeconds(Date.now()),
+                  },
+                ]
+              }
+              return sortConversationsWithTemp(updatedList, isTemporaryConversation)
+            })
+            if (shouldUpdateConversation || isActiveSession()) {
+              return payload.conversation_id
+            }
+            return prevId
+          })
+        }
+        await fetchConversations(assistantSnapshot)
+      }
+
+      const processChunk = async (chunk: string) => {
+        if (!isActiveSession()) return
+        const lines = chunk.split('\n')
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const payload = line.slice(6)
+          if (!payload || payload === '[DONE]') continue
+            try {
+            const jsonData = JSON.parse(payload)
+              if (jsonData.event === 'message') {
+                aiMessage.content += jsonData.answer || ''
+              setAssistantTyping(false)
+              updateAssistantMessage()
+            }
+              if (jsonData.event === 'message_end') {
+              await handleMessageEnd(jsonData)
+              }
+            } catch (e) {
+            // ignore malformed chunk
+          }
+        }
+      }
+
+      const reader = response.body?.getReader()
+      if (!reader) {
+        const fallbackText = await response.text()
+        if (fallbackText) {
+          await processChunk(fallbackText)
+        } else {
+          throw new Error('无法读取响应流')
+        }
+        return
+      }
 
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-
-        const chunk = decoder.decode(value)
-        const lines = chunk.split('\n')
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const jsonData = JSON.parse(line.slice(6))
-              
-              if (jsonData.event === 'message') {
-                aiMessage.content += jsonData.answer || ''
-                if (assistantTyping) setAssistantTyping(false)
-                setMessages(prev => {
-                  const newMessages = [...prev]
-                  newMessages[newMessages.length - 1] = { ...aiMessage }
-                  return newMessages
-                })
-              }
-
-              if (jsonData.event === 'message_end') {
-                if (jsonData.conversation_id) {
-                  const resolvedName = jsonData.conversation_name || jsonData.conversation?.name || '新的对话'
-                  const prevId = currentConversationId
-                  if (!prevId || isTemporaryConversation(prevId)) {
-                    setConversations(prev => prev.map(conv => {
-                      if (prevId && isTemporaryConversation(prevId) && conv.id === prevId) {
-                        return {
-                          ...conv,
-                          id: jsonData.conversation_id,
-                          name: resolvedName,
-                          updated_at: Math.floor(Date.now() / 1000),
-                        }
-                      }
-                      return conv
-                    }))
-                    setCurrentConversationId(jsonData.conversation_id)
-                  }
-                  await fetchConversations(currentAssistant)
-                }
-              }
-            } catch (e) {
-              // 忽略解析错误
-            }
-          }
-        }
+        const chunk = decoder.decode(value, { stream: true })
+        await processChunk(chunk)
       }
     } catch (error) {
       console.error('发送消息失败:', error)
-      setMessages(prev => [...prev, {
+      const fallbackMessage: Message = {
         id: Date.now().toString(),
         role: 'assistant',
         content: '抱歉，发送消息时出现错误，请重试。',
         created_at: Date.now(),
-      }])
+      }
+      setMessages(prev => sortMessages([...prev, fallbackMessage]))
+      setConversationCache(prev => {
+        const next = new Map(prev)
+        const existing = next.get(conversationKey) || { messages: [], cursor: null }
+        next.set(conversationKey, { ...existing, messages: sortMessages([...existing.messages, fallbackMessage]) })
+        return next
+      })
     } finally {
       setLoading(false)
       setAssistantTyping(false)
     }
   }
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  const loadMoreMessages = async () => {
+    if (!currentConversationId) return
+    const cacheEntry = conversationCache.get(currentConversationId)
+    if (!cacheEntry || cacheEntry.cursor == null || loadingMoreRef.current) return
+    const container = messagesContainerRef.current
+    const snapshot = {
+      height: container?.scrollHeight ?? 0,
+      top: container?.scrollTop ?? 0,
+    }
+    loadingMoreRef.current = true
+    await fetchConversationMessages(currentConversationId, cacheEntry.cursor, 'prepend', snapshot)
+    loadingMoreRef.current = false
+  }
+
+  const handleMessagesScroll = () => {
+    const container = messagesContainerRef.current
+    if (!container || loadingMoreRef.current) return
+    if (container.scrollTop <= 40) {
+      loadMoreMessages()
+    }
   }
 
   const handleLogout = () => {
@@ -481,41 +852,41 @@ function ChatPageContent() {
               className="p-2 hover:bg-blue-600 rounded-lg transition-colors"
             >
               {leftSidebarCollapsed ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
-            </button>
-          </div>
+              </button>
+        </div>
 
           {!leftSidebarCollapsed && (
-            <div className="flex-1 overflow-y-auto">
-              {assistants.map((assistant) => {
-                const Icon = getIcon(assistant.icon_name)
-                const isActive = currentAssistant?.id === assistant.id
+        <div className="flex-1 overflow-y-auto">
+          {assistants.map((assistant) => {
+            const Icon = getIcon(assistant.icon_name)
+            const isActive = currentAssistant?.id === assistant.id
 
-                return (
-                  <button
-                    key={assistant.id}
-                    onClick={() => selectAssistant(assistant)}
+            return (
+              <button
+                key={assistant.id}
+                onClick={() => selectAssistant(assistant)}
                     className={`w-full p-4 flex flex-col items-center text-center space-y-2 hover:bg-blue-600 transition-colors ${
-                      isActive ? 'bg-blue-600' : ''
-                    }`}
-                    title={assistant.name}
-                  >
-                    <Icon className="w-8 h-8" />
+                  isActive ? 'bg-blue-600' : ''
+                }`}
+                title={assistant.name}
+              >
+                <Icon className="w-8 h-8" />
                     <span className="text-xs">{assistant.name}</span>
-                  </button>
-                )
-              })}
-            </div>
+              </button>
+            )
+          })}
+        </div>
           )}
 
-          <div className="p-4 border-t border-blue-600">
-            <button
-              onClick={handleLogout}
-              className="w-full flex items-center justify-center space-x-2 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg transition-colors"
-            >
-              <LogOut className="w-4 h-4" />
+        <div className="p-4 border-t border-blue-600">
+          <button
+            onClick={handleLogout}
+            className="w-full flex items-center justify-center space-x-2 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg transition-colors"
+          >
+            <LogOut className="w-4 h-4" />
               {!leftSidebarCollapsed && <span className="text-sm">退出登录</span>}
-            </button>
-          </div>
+          </button>
+        </div>
         </div>
         {!leftSidebarCollapsed && (
           <div
@@ -535,12 +906,12 @@ function ChatPageContent() {
             {!middleSidebarCollapsed && <h2 className="font-semibold text-gray-900">对话记录</h2>}
             <div className="flex items-center space-x-2">
               {!middleSidebarCollapsed && (
-                <button
-                  onClick={startNewConversation}
-                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                  title="开始新对话"
-                >
-                  <Plus className="w-5 h-5 text-gray-600" />
+            <button
+              onClick={startNewConversation}
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              title="开始新对话"
+            >
+              <Plus className="w-5 h-5 text-gray-600" />
                 </button>
               )}
               <button
@@ -548,7 +919,7 @@ function ChatPageContent() {
                 className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
               >
                 {middleSidebarCollapsed ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
-              </button>
+            </button>
             </div>
           </div>
 
@@ -559,57 +930,82 @@ function ChatPageContent() {
           )}
 
           {!middleSidebarCollapsed ? (
-            <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto">
               {conversations.map((conv) => {
                 const isTemp = isTemporaryConversation(conv.id)
                 return (
-                <div
-                  key={conv.id}
-                  className={`w-full p-4 hover:bg-gray-50 border-b border-gray-100 transition-colors ${
-                    currentConversationId === conv.id ? 'bg-blue-50' : ''
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <button onClick={() => loadConversation(conv.id)} className="text-left flex-1">
-                      <div className="font-medium text-sm text-gray-900 truncate">
-                        {editingConversationId === conv.id ? (
-                          <input
-                            autoFocus
-                            value={editingName}
-                            onChange={(e) => setEditingName(e.target.value)}
-                            onBlur={() => renameConversation(conv.id, editingName)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') renameConversation(conv.id, editingName)
-                              if (e.key === 'Escape') { setEditingConversationId(''); setEditingName('') }
-                            }}
-                            className="w-full px-2 py-1 border border-gray-300 rounded"
-                          />
-                        ) : (
+            <div
+              key={conv.id}
+              className={`w-full p-4 hover:bg-gray-50 border-b border-gray-100 transition-colors ${
+                currentConversationId === conv.id ? 'bg-blue-50' : ''
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <button onClick={() => loadConversation(conv.id)} className="text-left flex-1">
+                  <div className="font-medium text-sm text-gray-900 truncate">
+                    {editingConversationId === conv.id ? (
+                      <input
+                        autoFocus
+                        value={editingName}
+                        onChange={(e) => setEditingName(e.target.value)}
+                        onBlur={() => renameConversation(conv.id, editingName)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') renameConversation(conv.id, editingName)
+                          if (e.key === 'Escape') { setEditingConversationId(''); setEditingName('') }
+                        }}
+                        className="w-full px-2 py-1 border border-gray-300 rounded"
+                      />
+                    ) : (
                           <span>{isTemp ? '新的对话' : (conv.name || '新的对话')}</span>
-                        )}
-                      </div>
-                      <div className="text-xs text-gray-500 mt-1">
-                        {new Date(conv.updated_at * 1000).toLocaleString('zh-CN')}
-                      </div>
-                    </button>
-                    <button
-                      className={`p-2 rounded-lg ml-2 ${isTemp ? 'text-gray-300 cursor-not-allowed' : 'hover:bg-gray-100 text-gray-600'}`}
-                      disabled={isTemp}
-                      title="重命名"
-                      onClick={() => { setEditingConversationId(conv.id); setEditingName(conv.name || '') }}
-                    >
-                      <Pencil className={`w-4 h-4 ${isTemp ? 'text-gray-300' : 'text-gray-600'}`} />
-                    </button>
+                    )}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {new Date(conv.updated_at * 1000).toLocaleString('zh-CN')}
+                  </div>
+                </button>
+                    <div className="relative ml-2" onClick={(e) => e.stopPropagation()} data-action-menu>
+                <button
+                        className="p-2 hover:bg-gray-100 rounded-lg"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setActionMenuId(prev => (prev === conv.id ? '' : conv.id))
+                        }}
+                      >
+                        <MoreHorizontal className="w-4 h-4 text-gray-600" />
+                      </button>
+                      {actionMenuId === conv.id && (
+                        <div className="absolute right-0 mt-2 w-32 rounded-lg border border-gray-200 bg-white shadow-lg z-50">
+                          <button
+                            className={`w-full px-4 py-2 text-left text-sm ${isTemp ? 'text-gray-300 cursor-not-allowed' : 'hover:bg-gray-50 text-gray-700'}`}
+                            disabled={isTemp}
+                            onClick={() => {
+                              if (isTemp) return
+                              setEditingConversationId(conv.id)
+                              setEditingName(conv.name || '')
+                              setActionMenuId('')
+                            }}
+                          >
+                            重命名
+                          </button>
+                          <button
+                            className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                            onClick={() => deleteConversation(conv.id)}
+                          >
+                            删除会话
+                </button>
+              </div>
+                      )}
+            </div>
                   </div>
                 </div>
               )})}
 
-              {conversations.length === 0 && (
-                <div className="p-8 text-center text-gray-500 text-sm">
-                  暂无对话记录
-                </div>
-              )}
+          {conversations.length === 0 && (
+            <div className="p-8 text-center text-gray-500 text-sm">
+              暂无对话记录
             </div>
+          )}
+        </div>
           ) : (
             <div className="flex-1 flex items-center justify-center text-gray-400 text-xs px-2 text-center">
               展开查看对话记录
@@ -627,16 +1023,16 @@ function ChatPageContent() {
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="bg-white border-b border-gray-200 p-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-semibold text-gray-900">
+            <div>
+              <h1 className="text-xl font-semibold text-gray-900">
               {currentAssistant ? currentAssistant.name : '请选择助手'}
-            </h1>
+              </h1>
             {currentAssistant && (
               <p className="text-sm text-gray-500">
                 {currentConversationId ? '对话进行中' : '开始输入以创建新的对话'}
               </p>
-            )}
-          </div>
+              )}
+            </div>
           <button
             onClick={() => router.push('/assistants')}
             className="flex items-center px-3 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
@@ -647,7 +1043,11 @@ function ChatPageContent() {
         </div>
 
         {/* Messages Area */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+        <div
+          ref={messagesContainerRef}
+          onScroll={handleMessagesScroll}
+          className="flex-1 overflow-y-auto p-6 space-y-4"
+        >
           {!currentAssistant ? (
             <div className="flex items-center justify-center h-full">
               <div className="text-center text-gray-500">
@@ -687,9 +1087,9 @@ function ChatPageContent() {
                       </ReactMarkdown>
                     </div>
                   ) : (
-                    <div className="whitespace-pre-wrap break-words">
-                      {message.content}
-                    </div>
+                  <div className="whitespace-pre-wrap break-words">
+                    {message.content}
+                  </div>
                   )}
                 </div>
               </div>
@@ -708,7 +1108,6 @@ function ChatPageContent() {
               )}
             </>
           )}
-          <div ref={messagesEndRef} />
         </div>
 
         {/* Input Area */}
