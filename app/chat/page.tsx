@@ -984,8 +984,20 @@ function ChatPageContent() {
           )}
 
           {!middleSidebarCollapsed ? (
-        <div className="flex-1 overflow-y-auto">
-              {conversations.map((conv) => {
+            <div className="flex-1 overflow-y-auto">
+              {conversationsLoading ? (
+                <div className="p-6 space-y-4">
+                  {[1, 2, 3].map((item) => (
+                    <div key={item} className="animate-pulse">
+                      <div className="h-4 bg-gray-200 rounded w-1/3 mb-3"></div>
+                      <div className="h-3 bg-gray-100 rounded w-1/2"></div>
+                      <div className="h-[1px] bg-gray-100 mt-4"></div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <>
+                  {conversations.map((conv) => {
                 const isTemp = isTemporaryConversation(conv.id)
                 return (
             <div
@@ -1066,14 +1078,16 @@ function ChatPageContent() {
             </div>
                   </div>
                 </div>
-              )})}
+                  )})}
 
-          {conversations.length === 0 && (
-            <div className="p-8 text-center text-gray-500 text-sm">
-              暂无对话记录
+                  {conversations.length === 0 && (
+                    <div className="p-8 text-center text-gray-500 text-sm">
+                      暂无对话记录
+                    </div>
+                  )}
+                </>
+              )}
             </div>
-          )}
-        </div>
           ) : (
             <div className="flex-1 flex items-center justify-center text-gray-400 text-xs px-2 text-center">
               展开查看对话记录
