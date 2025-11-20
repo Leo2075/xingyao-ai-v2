@@ -38,11 +38,6 @@ const iconMap: { [key: string]: any } = {
   'dollar-sign': DollarSign,
 }
 
-type ConversationCacheEntry = {
-  messages: Message[]
-  cursor: number | null
-}
-
 const toSeconds = (value: any) => {
   if (typeof value === 'number') {
     return value > 1e12 ? Math.floor(value / 1000) : value
@@ -141,8 +136,9 @@ function ChatPageContent() {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [currentConversationId, setCurrentConversationId] = useState<string>('')
   const [messages, setMessages] = useState<Message[]>([])
-  const [conversationCache, setConversationCache] = useState<Map<string, ConversationCacheEntry>>(new Map())
   const [currentCursorRounds, setCurrentCursorRounds] = useState<number | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [showLoadMoreHint, setShowLoadMoreHint] = useState(false)
   const [inputMessage, setInputMessage] = useState('')
   const [loading, setLoading] = useState(false)
   const [advancedInputs, setAdvancedInputs] = useState<Record<string, any>>({})
@@ -163,6 +159,7 @@ function ChatPageContent() {
   const scrollIntentRef = useRef<ScrollBehavior | null>(null)
   const currentConversationIdRef = useRef<string>('')
   const activeStreamRef = useRef<{ id: string; assistantId: string } | null>(null)
+  const menuRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   const router = useRouter()
   const searchParams = useSearchParams()
   const [user, setUser] = useState<any>(null)
@@ -242,12 +239,6 @@ function ChatPageContent() {
   }, [currentConversationId])
 
   useEffect(() => {
-    const handleDocumentClick = () => setActionMenuId('')
-    document.addEventListener('click', handleDocumentClick)
-    return () => document.removeEventListener('click', handleDocumentClick)
-  }, [])
-
-  useEffect(() => {
     const handleMouseMove = (event: MouseEvent) => {
       if (isResizingLeft) {
         const delta = event.clientX - leftResizeState.current.startX
@@ -282,18 +273,15 @@ function ChatPageContent() {
     if (!actionMenuId) return
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as HTMLElement
-      const menuElement = target.closest('[data-action-menu]')
-      if (!menuElement) {
+      const menuElement = menuRefs.current.get(actionMenuId)
+      if (menuElement && !menuElement.contains(target)) {
         setActionMenuId('')
       }
     }
-    // 使用 setTimeout 确保在按钮点击事件之后执行
-    const timer = setTimeout(() => {
-      document.addEventListener('click', handleClickOutside, true)
-    }, 0)
+    // 使用 mousedown 事件，在 click 之前触发，避免冲突
+    document.addEventListener('mousedown', handleClickOutside)
     return () => {
-      clearTimeout(timer)
-      document.removeEventListener('click', handleClickOutside, true)
+      document.removeEventListener('mousedown', handleClickOutside)
     }
   }, [actionMenuId])
 
@@ -416,60 +404,29 @@ function ChatPageContent() {
       if (response.ok && data.messages) {
         const normalized = sortMessages(data.messages.map(normalizeMessage))
 
-        setConversationCache(prev => {
-          const next = new Map(prev)
-          const existing = next.get(conversationId)
-          let combined: Message[]
-          if (mode === 'prepend' && existing) {
-            // 合并时去重，避免重复消息
-            const existingIds = new Set(existing.messages.map(m => m.id))
-            const newMessages = normalized.filter(m => !existingIds.has(m.id))
-            combined = sortMessages([...newMessages, ...existing.messages])
-          } else if (mode === 'replace' && existing) {
-            // replace 模式：合并新旧消息，保留缓存中可能更新的消息
-            const existingIds = new Set(existing.messages.map(m => m.id))
-            const newIds = new Set(normalized.map(m => m.id))
-            // 保留缓存中不在新消息中的消息（可能是流式更新中的消息）
-            const preservedFromCache = existing.messages.filter(m => !newIds.has(m.id))
-            // 合并：新消息 + 缓存中保留的消息
-            combined = sortMessages([...normalized, ...preservedFromCache])
-          } else {
-            combined = normalized
-          }
-          next.set(conversationId, { messages: combined, cursor: data.nextCursorRounds ?? null })
-          return next
-        })
-
         if (currentConversationIdRef.current === conversationId) {
           if (mode === 'prepend') {
+            // 加载历史消息时，合并到现有消息前面
             setMessages(prev => {
               const existingIds = new Set(prev.map(m => m.id))
               const newMessages = normalized.filter(m => !existingIds.has(m.id))
               return sortMessages([...newMessages, ...prev])
             })
-          } else if (mode === 'replace') {
-            // replace 模式也需要合并，避免丢失缓存中的消息
-            setMessages(prev => {
-              const existingIds = new Set(prev.map(m => m.id))
-              const newIds = new Set(normalized.map(m => m.id))
-              const preservedFromPrev = prev.filter(m => !newIds.has(m.id))
-              return sortMessages([...normalized, ...preservedFromPrev])
-            })
+            // 保持滚动位置
+            if (scrollSnapshot) {
+              requestAnimationFrame(() => {
+                const container = messagesContainerRef.current
+                if (!container) return
+                const diff = container.scrollHeight - scrollSnapshot.height
+                container.scrollTop = scrollSnapshot.top + diff
+              })
+            }
           } else {
+            // replace 模式：直接替换消息
             setMessages(normalized)
+            requestScrollToBottom('auto')
           }
           setCurrentCursorRounds(data.nextCursorRounds ?? null)
-
-          if (mode === 'replace') {
-            requestScrollToBottom('auto')
-          } else if (scrollSnapshot) {
-            requestAnimationFrame(() => {
-              const container = messagesContainerRef.current
-              if (!container) return
-              const diff = container.scrollHeight - scrollSnapshot.height
-              container.scrollTop = scrollSnapshot.top + diff
-            })
-          }
         }
       }
     } catch (error) {
@@ -484,21 +441,15 @@ function ChatPageContent() {
     setCurrentConversationId(conversationId)
     currentConversationIdRef.current = conversationId
     
-    // 先显示缓存，提供即时反馈
-    const cached = conversationCache.get(conversationId)
-    if (cached && cached.messages.length > 0) {
-      setMessages(cached.messages)
-      setCurrentCursorRounds(cached.cursor)
-      setAssistantTyping(false)
-      requestScrollToBottom('auto')
-    } else {
-      setMessages([])
-      setCurrentCursorRounds(null)
-    }
+    // 清空消息，显示加载动画
+    setMessages([])
+    setCurrentCursorRounds(null)
+    setAssistantTyping(false)
+    setShowLoadMoreHint(false)
 
     if (isTemporaryConversation(conversationId)) return
 
-    // 后台刷新最新消息，确保不丢失
+    // 显示加载动画并获取最新3轮对话
     setLoading(true)
     try {
       await fetchConversationMessages(conversationId, 0, 'replace')
@@ -520,11 +471,6 @@ function ChatPageContent() {
     setCurrentConversationId(tempConversation.id)
     setMessages([])
     setCurrentCursorRounds(null)
-    setConversationCache(prev => {
-      const next = new Map(prev)
-      next.set(tempConversation.id, { messages: [], cursor: null })
-      return next
-    })
     requestScrollToBottom('auto')
   }
 
@@ -552,14 +498,7 @@ function ChatPageContent() {
   }
 
   const deleteConversation = async (conversationId: string) => {
-    const previousConversations = conversations
-    const previousCache = conversationCache.get(conversationId)
     setConversations(prev => prev.filter(c => c.id !== conversationId))
-    setConversationCache(prev => {
-      const next = new Map(prev)
-      next.delete(conversationId)
-      return next
-    })
 
     if (currentConversationId === conversationId) {
       setCurrentConversationId('')
@@ -584,14 +523,7 @@ function ChatPageContent() {
       await fetchConversations(currentAssistant)
     } catch (error) {
       console.error('删除对话失败:', error)
-      setConversations(previousConversations)
-      if (previousCache) {
-        setConversationCache(prev => {
-          const next = new Map(prev)
-          next.set(conversationId, previousCache)
-          return next
-        })
-      }
+      await fetchConversations(currentAssistant)
     } finally {
       setActionMenuId('')
     }
@@ -612,11 +544,6 @@ function ChatPageContent() {
       }
       setConversations(prev => [tempConversation, ...prev.filter(conv => conv.id !== conversationKey)])
       setCurrentConversationId(conversationKey)
-      setConversationCache(prev => {
-        const next = new Map(prev)
-        next.set(conversationKey, { messages: [], cursor: null })
-        return next
-      })
     }
 
     const sessionConversationKey = conversationKey
@@ -639,12 +566,6 @@ function ChatPageContent() {
     }
 
     setMessages(prev => sortMessages([...prev, userMessage]))
-        setConversationCache(prev => {
-      const next = new Map(prev)
-          const existing = next.get(sessionConversationKey) || { messages: [], cursor: null }
-          next.set(sessionConversationKey, { ...existing, messages: sortMessages([...existing.messages, userMessage]) })
-      return next
-    })
     requestScrollToBottom('auto')
     setInputMessage('')
     setLoading(true)
@@ -678,24 +599,6 @@ function ChatPageContent() {
       }
 
       const updateAssistantMessage = () => {
-        // 始终更新缓存，即使不是活跃会话也要保存
-        setConversationCache(prev => {
-          const next = new Map(prev)
-          const existing = next.get(sessionConversationKey) || { messages: [], cursor: null }
-          const idx = existing.messages.findIndex(msg => msg.id === aiMessage.id)
-          if (idx === -1) {
-            next.set(sessionConversationKey, {
-              ...existing,
-              messages: sortMessages([...existing.messages, aiMessage]),
-            })
-          } else {
-            const copy = [...existing.messages]
-            copy[idx] = { ...aiMessage }
-            next.set(sessionConversationKey, { ...existing, messages: sortMessages(copy) })
-          }
-          return next
-        })
-        
         // 只有活跃会话才更新UI
         if (isActiveSession()) {
           setMessages(prev => {
@@ -717,28 +620,6 @@ function ChatPageContent() {
       const handleMessageEnd = async (payload: any) => {
         if (!payload?.conversation_id || !assistantSnapshot) return
         const resolvedName = payload.conversation_name || payload.conversation?.name || '新的对话'
-        
-        // 始终更新缓存，确保消息不丢失
-        setConversationCache(prev => {
-          const next = new Map(prev)
-          const cacheKey = isTemporaryConversation(sessionConversationKey) ? sessionConversationKey : payload.conversation_id
-          const existing = next.get(cacheKey)
-          
-          if (existing) {
-            // 如果是从临时会话转换，需要迁移缓存
-            if (isTemporaryConversation(sessionConversationKey) && cacheKey === sessionConversationKey) {
-              next.set(payload.conversation_id, existing)
-              next.delete(sessionConversationKey)
-            } else if (!isTemporaryConversation(sessionConversationKey)) {
-              // 如果不是临时会话，确保缓存键正确
-              next.set(payload.conversation_id, existing)
-              if (cacheKey !== payload.conversation_id) {
-                next.delete(cacheKey)
-              }
-            }
-          }
-          return next
-        })
 
         // 始终更新会话列表，即使不是活跃会话
         const shouldUpdateConversation = isTemporaryConversation(sessionConversationKey)
@@ -831,12 +712,6 @@ function ChatPageContent() {
         created_at: Date.now(),
       }
       setMessages(prev => sortMessages([...prev, fallbackMessage]))
-      setConversationCache(prev => {
-        const next = new Map(prev)
-        const existing = next.get(conversationKey) || { messages: [], cursor: null }
-        next.set(conversationKey, { ...existing, messages: sortMessages([...existing.messages, fallbackMessage]) })
-        return next
-      })
     } finally {
       setLoading(false)
       setAssistantTyping(false)
@@ -844,24 +719,39 @@ function ChatPageContent() {
   }
 
   const loadMoreMessages = async () => {
-    if (!currentConversationId) return
-    const cacheEntry = conversationCache.get(currentConversationId)
-    if (!cacheEntry || cacheEntry.cursor == null || loadingMoreRef.current) return
+    if (!currentConversationId || currentCursorRounds == null || loadingMoreRef.current || isTemporaryConversation(currentConversationId)) return
     const container = messagesContainerRef.current
+    if (!container) return
     const snapshot = {
-      height: container?.scrollHeight ?? 0,
-      top: container?.scrollTop ?? 0,
+      height: container.scrollHeight,
+      top: container.scrollTop,
     }
     loadingMoreRef.current = true
-    await fetchConversationMessages(currentConversationId, cacheEntry.cursor, 'prepend', snapshot)
-    loadingMoreRef.current = false
+    setLoadingMore(true)
+    try {
+      await fetchConversationMessages(currentConversationId, currentCursorRounds, 'prepend', snapshot)
+    } finally {
+      loadingMoreRef.current = false
+      setLoadingMore(false)
+    }
   }
 
   const handleMessagesScroll = () => {
     const container = messagesContainerRef.current
-    if (!container || loadingMoreRef.current) return
-    if (container.scrollTop <= 40) {
-      loadMoreMessages()
+    if (!container || !currentConversationId || isTemporaryConversation(currentConversationId)) {
+      setShowLoadMoreHint(false)
+      return
+    }
+    
+    // 如果还有更多历史消息，显示提示
+    if (currentCursorRounds != null && container.scrollTop <= 100) {
+      setShowLoadMoreHint(true)
+      // 继续滚动时触发加载
+      if (container.scrollTop <= 40 && !loadingMoreRef.current) {
+        loadMoreMessages()
+      }
+    } else {
+      setShowLoadMoreHint(false)
     }
   }
 
@@ -1001,24 +891,32 @@ function ChatPageContent() {
                     {new Date(conv.updated_at * 1000).toLocaleString('zh-CN')}
                   </div>
                 </button>
-                    <div className="relative ml-2" data-action-menu>
+                    <div 
+                      className="relative ml-2" 
+                      ref={(el) => {
+                        if (el) {
+                          menuRefs.current.set(conv.id, el)
+                        } else {
+                          menuRefs.current.delete(conv.id)
+                        }
+                      }}
+                    >
                 <button
                         type="button"
                         className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                        onMouseDown={(e) => {
-                          e.preventDefault()
+                        onClick={(e) => {
                           e.stopPropagation()
                           setActionMenuId(prev => (prev === conv.id ? '' : conv.id))
-                        }}
-                        onClick={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
                         }}
                       >
                         <MoreHorizontal className="w-4 h-4 text-gray-600" />
                       </button>
                       {actionMenuId === conv.id && (
-                        <div className="absolute right-0 mt-1 w-32 rounded-lg border border-gray-200 bg-white shadow-xl z-[100]" onClick={(e) => e.stopPropagation()}>
+                        <div 
+                          className="absolute right-0 mt-1 w-32 rounded-lg border border-gray-200 bg-white shadow-xl z-[100]" 
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           <button
                             className={`w-full px-4 py-2 text-left text-sm ${isTemp ? 'text-gray-300 cursor-not-allowed' : 'hover:bg-gray-50 text-gray-700'}`}
                             disabled={isTemp}
@@ -1099,6 +997,13 @@ function ChatPageContent() {
                 <p>请从左侧选择一个助手开始对话</p>
               </div>
             </div>
+          ) : loading && messages.length === 0 ? (
+            <div className="flex items-center justify-center h-full">
+              <div className="text-center text-gray-500">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+                <p>正在加载对话...</p>
+              </div>
+            </div>
           ) : messages.length === 0 ? (
             <div className="flex items-center justify-center h-full">
               <div className="text-center text-gray-500">
@@ -1109,6 +1014,15 @@ function ChatPageContent() {
             </div>
           ) : (
             <>
+              {showLoadMoreHint && currentCursorRounds != null && (
+                <div className="sticky top-0 z-10 bg-gray-50 py-2 mb-4">
+                  <div className="flex items-center justify-center space-x-2 text-sm text-gray-500">
+                    <div className="flex-1 border-t border-gray-300"></div>
+                    <span>{loadingMore ? '正在加载历史消息...' : '继续滑动加载历史消息'}</span>
+                    <div className="flex-1 border-t border-gray-300"></div>
+                  </div>
+                </div>
+              )}
               {messages.map((message) => (
               <div
                 key={message.id}
