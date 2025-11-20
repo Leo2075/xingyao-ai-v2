@@ -88,6 +88,10 @@ const sortConversationsWithTemp = (
   return [...temps, ...normals]
 }
 
+const INPUT_LABELS: Record<string, string> = {
+  user: '用户信息',
+}
+
 const markdownComponents: Components = {
   code({ inline, className, children, ...props }: any) {
     if (!inline) {
@@ -310,7 +314,10 @@ function ChatPageContent() {
   }
 
   const getPresetInputs = (assistant: Assistant) => {
-    const name = assistant.name
+    const name = assistant.name || ''
+    if (name === '原创选题文案策划') {
+      return { user: '' }
+    }
     if (name.includes('IP') || name.includes('定位')) {
       return { persona: '', audience: '' }
     }
@@ -1155,7 +1162,7 @@ function ChatPageContent() {
                 <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                   {Object.keys(advancedInputs).map((key) => (
                     <div key={key} className="flex items-center space-x-2">
-                      <label className="text-sm text-gray-700 w-28">{key}</label>
+                      <label className="text-sm text-gray-700 w-28">{INPUT_LABELS[key] || key}</label>
                       <input
                         className="flex-1 px-3 py-2 border border-gray-300 rounded"
                         value={String(advancedInputs[key] ?? '')}
