@@ -449,10 +449,53 @@ function ChatPageContent() {
 
     if (isTemporaryConversation(conversationId)) return
 
-    // 显示加载动画并获取最新3轮对话
+    // 显示加载动画并循环获取所有消息
     setLoading(true)
     try {
-      await fetchConversationMessages(conversationId, 0, 'replace')
+      let allMessages: Message[] = []
+      let cursorRounds = 0
+      let hasMore = true
+      
+      // 循环加载直到获取所有消息
+      while (hasMore) {
+        const response = await fetch('/api/dify/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            assistantId: currentAssistant.id,
+            conversationId,
+            userId: user?.id,
+            cursorRounds,
+            rounds: 10, // 每次加载10轮以提高效率
+          }),
+        })
+
+        const data = await response.json()
+        if (response.ok && data.messages && data.messages.length > 0) {
+          const normalized = sortMessages(data.messages.map(normalizeMessage))
+          // 合并消息，去重
+          const existingIds = new Set(allMessages.map(m => m.id))
+          const newMessages = normalized.filter(m => !existingIds.has(m.id))
+          allMessages = sortMessages([...newMessages, ...allMessages])
+          
+          // 检查是否还有更多消息
+          hasMore = data.nextCursorRounds != null
+          cursorRounds = data.nextCursorRounds ?? 0
+        } else {
+          hasMore = false
+        }
+      }
+      
+      // 更新消息列表
+      if (currentConversationIdRef.current === conversationId) {
+        setMessages(allMessages)
+        setCurrentCursorRounds(cursorRounds > 0 ? cursorRounds : null)
+        requestScrollToBottom('auto')
+      }
+    } catch (error) {
+      console.error('加载对话历史失败:', error)
     } finally {
       setLoading(false)
     }
@@ -498,6 +541,15 @@ function ChatPageContent() {
   }
 
   const deleteConversation = async (conversationId: string) => {
+    if (!currentAssistant || isTemporaryConversation(conversationId)) {
+      setActionMenuId('')
+      return
+    }
+
+    // 保存当前列表，以便删除失败时恢复
+    const previousConversations = conversations
+    
+    // 先从前端列表中移除，提供即时反馈
     setConversations(prev => prev.filter(c => c.id !== conversationId))
 
     if (currentConversationId === conversationId) {
@@ -505,10 +557,6 @@ function ChatPageContent() {
       setMessages([])
       setCurrentCursorRounds(null)
       requestScrollToBottom('auto')
-    }
-
-    if (!currentAssistant || isTemporaryConversation(conversationId)) {
-      return
     }
 
     try {
@@ -519,11 +567,22 @@ function ChatPageContent() {
         },
         body: JSON.stringify({ assistantId: currentAssistant.id, userId: user?.id }),
       })
-      if (!response.ok) throw new Error('删除失败')
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || '删除失败')
+      }
+      
+      // 删除成功后，刷新对话列表以确保同步
       await fetchConversations(currentAssistant)
     } catch (error) {
       console.error('删除对话失败:', error)
-      await fetchConversations(currentAssistant)
+      // 删除失败时，恢复之前的列表
+      setConversations(previousConversations)
+      // 如果删除的是当前对话，恢复当前对话ID
+      if (currentConversationId === conversationId) {
+        setCurrentConversationId(conversationId)
+      }
     } finally {
       setActionMenuId('')
     }
