@@ -282,13 +282,18 @@ function ChatPageContent() {
     if (!actionMenuId) return
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as HTMLElement
-      if (!target.closest('[data-action-menu]')) {
+      const menuElement = target.closest('[data-action-menu]')
+      if (!menuElement) {
         setActionMenuId('')
       }
     }
-    document.addEventListener('mousedown', handleClickOutside)
+    // 使用 setTimeout 确保在按钮点击事件之后执行
+    const timer = setTimeout(() => {
+      document.addEventListener('click', handleClickOutside, true)
+    }, 0)
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
+      clearTimeout(timer)
+      document.removeEventListener('click', handleClickOutside, true)
     }
   }, [actionMenuId])
 
@@ -420,6 +425,14 @@ function ChatPageContent() {
             const existingIds = new Set(existing.messages.map(m => m.id))
             const newMessages = normalized.filter(m => !existingIds.has(m.id))
             combined = sortMessages([...newMessages, ...existing.messages])
+          } else if (mode === 'replace' && existing) {
+            // replace 模式：合并新旧消息，保留缓存中可能更新的消息
+            const existingIds = new Set(existing.messages.map(m => m.id))
+            const newIds = new Set(normalized.map(m => m.id))
+            // 保留缓存中不在新消息中的消息（可能是流式更新中的消息）
+            const preservedFromCache = existing.messages.filter(m => !newIds.has(m.id))
+            // 合并：新消息 + 缓存中保留的消息
+            combined = sortMessages([...normalized, ...preservedFromCache])
           } else {
             combined = normalized
           }
@@ -433,6 +446,14 @@ function ChatPageContent() {
               const existingIds = new Set(prev.map(m => m.id))
               const newMessages = normalized.filter(m => !existingIds.has(m.id))
               return sortMessages([...newMessages, ...prev])
+            })
+          } else if (mode === 'replace') {
+            // replace 模式也需要合并，避免丢失缓存中的消息
+            setMessages(prev => {
+              const existingIds = new Set(prev.map(m => m.id))
+              const newIds = new Set(normalized.map(m => m.id))
+              const preservedFromPrev = prev.filter(m => !newIds.has(m.id))
+              return sortMessages([...normalized, ...preservedFromPrev])
             })
           } else {
             setMessages(normalized)
@@ -463,8 +484,9 @@ function ChatPageContent() {
     setCurrentConversationId(conversationId)
     currentConversationIdRef.current = conversationId
     
+    // 先显示缓存，提供即时反馈
     const cached = conversationCache.get(conversationId)
-    if (cached) {
+    if (cached && cached.messages.length > 0) {
       setMessages(cached.messages)
       setCurrentCursorRounds(cached.cursor)
       setAssistantTyping(false)
@@ -476,10 +498,13 @@ function ChatPageContent() {
 
     if (isTemporaryConversation(conversationId)) return
 
+    // 后台刷新最新消息，确保不丢失
     setLoading(true)
-    // 总是刷新最新消息，确保不丢失
-    await fetchConversationMessages(conversationId, 0, 'replace')
-    setLoading(false)
+    try {
+      await fetchConversationMessages(conversationId, 0, 'replace')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const startNewConversation = () => {
@@ -692,23 +717,34 @@ function ChatPageContent() {
       const handleMessageEnd = async (payload: any) => {
         if (!payload?.conversation_id || !assistantSnapshot) return
         const resolvedName = payload.conversation_name || payload.conversation?.name || '新的对话'
+        
+        // 始终更新缓存，确保消息不丢失
         setConversationCache(prev => {
           const next = new Map(prev)
-          if (isTemporaryConversation(sessionConversationKey) && next.has(sessionConversationKey)) {
-            const entry = next.get(sessionConversationKey)!
-            next.set(payload.conversation_id, entry)
-            next.delete(sessionConversationKey)
+          const cacheKey = isTemporaryConversation(sessionConversationKey) ? sessionConversationKey : payload.conversation_id
+          const existing = next.get(cacheKey)
+          
+          if (existing) {
+            // 如果是从临时会话转换，需要迁移缓存
+            if (isTemporaryConversation(sessionConversationKey) && cacheKey === sessionConversationKey) {
+              next.set(payload.conversation_id, existing)
+              next.delete(sessionConversationKey)
+            } else if (!isTemporaryConversation(sessionConversationKey)) {
+              // 如果不是临时会话，确保缓存键正确
+              next.set(payload.conversation_id, existing)
+              if (cacheKey !== payload.conversation_id) {
+                next.delete(cacheKey)
+              }
+            }
           }
           return next
         })
 
         // 始终更新会话列表，即使不是活跃会话
         const shouldUpdateConversation = isTemporaryConversation(sessionConversationKey)
-        if (shouldUpdateConversation || isActiveSession()) {
-          setCurrentConversationId((prevId) => {
-            if (prevId && !isTemporaryConversation(prevId) && !shouldUpdateConversation) {
-              return prevId
-            }
+        setCurrentConversationId((prevId) => {
+          const isCurrentSession = prevId === sessionConversationKey || prevId === payload.conversation_id
+          if (shouldUpdateConversation || isCurrentSession) {
             setConversations((prev) => {
               let updatedList = prev.map((conv) => {
                 if (shouldUpdateConversation && conv.id === sessionConversationKey) {
@@ -735,12 +771,14 @@ function ChatPageContent() {
               }
               return sortConversationsWithTemp(updatedList, isTemporaryConversation)
             })
-            if (shouldUpdateConversation || isActiveSession()) {
+            if (shouldUpdateConversation || isCurrentSession) {
               return payload.conversation_id
             }
-            return prevId
-          })
-        }
+          }
+          return prevId
+        })
+        
+        // 刷新会话列表
         await fetchConversations(assistantSnapshot)
       }
 
@@ -963,18 +1001,24 @@ function ChatPageContent() {
                     {new Date(conv.updated_at * 1000).toLocaleString('zh-CN')}
                   </div>
                 </button>
-                    <div className="relative ml-2" onClick={(e) => e.stopPropagation()} data-action-menu>
+                    <div className="relative ml-2" data-action-menu>
                 <button
-                        className="p-2 hover:bg-gray-100 rounded-lg"
-                        onClick={(e) => {
+                        type="button"
+                        className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                        onMouseDown={(e) => {
+                          e.preventDefault()
                           e.stopPropagation()
                           setActionMenuId(prev => (prev === conv.id ? '' : conv.id))
+                        }}
+                        onClick={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
                         }}
                       >
                         <MoreHorizontal className="w-4 h-4 text-gray-600" />
                       </button>
                       {actionMenuId === conv.id && (
-                        <div className="absolute right-0 mt-2 w-32 rounded-lg border border-gray-200 bg-white shadow-lg z-50">
+                        <div className="absolute right-0 mt-1 w-32 rounded-lg border border-gray-200 bg-white shadow-xl z-[100]" onClick={(e) => e.stopPropagation()}>
                           <button
                             className={`w-full px-4 py-2 text-left text-sm ${isTemp ? 'text-gray-300 cursor-not-allowed' : 'hover:bg-gray-50 text-gray-700'}`}
                             disabled={isTemp}
