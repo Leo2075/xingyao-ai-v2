@@ -277,6 +277,21 @@ function ChatPageContent() {
     }
   }, [isResizingLeft, isResizingMiddle])
 
+  // 点击外部关闭菜单
+  useEffect(() => {
+    if (!actionMenuId) return
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement
+      if (!target.closest('[data-action-menu]')) {
+        setActionMenuId('')
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [actionMenuId])
+
   const fetchAssistants = async () => {
     try {
       const response = await fetch('/api/assistants')
@@ -399,16 +414,29 @@ function ChatPageContent() {
         setConversationCache(prev => {
           const next = new Map(prev)
           const existing = next.get(conversationId)
-          const combined =
-            mode === 'prepend' && existing
-              ? sortMessages([...normalized, ...existing.messages])
-              : normalized
+          let combined: Message[]
+          if (mode === 'prepend' && existing) {
+            // 合并时去重，避免重复消息
+            const existingIds = new Set(existing.messages.map(m => m.id))
+            const newMessages = normalized.filter(m => !existingIds.has(m.id))
+            combined = sortMessages([...newMessages, ...existing.messages])
+          } else {
+            combined = normalized
+          }
           next.set(conversationId, { messages: combined, cursor: data.nextCursorRounds ?? null })
           return next
         })
 
         if (currentConversationIdRef.current === conversationId) {
-          setMessages(prev => (mode === 'prepend' ? sortMessages([...normalized, ...prev]) : normalized))
+          if (mode === 'prepend') {
+            setMessages(prev => {
+              const existingIds = new Set(prev.map(m => m.id))
+              const newMessages = normalized.filter(m => !existingIds.has(m.id))
+              return sortMessages([...newMessages, ...prev])
+            })
+          } else {
+            setMessages(normalized)
+          }
           setCurrentCursorRounds(data.nextCursorRounds ?? null)
 
           if (mode === 'replace') {
@@ -433,6 +461,8 @@ function ChatPageContent() {
     if (!currentAssistant) return
 
     setCurrentConversationId(conversationId)
+    currentConversationIdRef.current = conversationId
+    
     const cached = conversationCache.get(conversationId)
     if (cached) {
       setMessages(cached.messages)
@@ -447,6 +477,7 @@ function ChatPageContent() {
     if (isTemporaryConversation(conversationId)) return
 
     setLoading(true)
+    // 总是刷新最新消息，确保不丢失
     await fetchConversationMessages(conversationId, 0, 'replace')
     setLoading(false)
   }
@@ -622,17 +653,7 @@ function ChatPageContent() {
       }
 
       const updateAssistantMessage = () => {
-        if (!isActiveSession()) return
-        setMessages(prev => {
-          const updated = [...prev]
-          const index = updated.findIndex((msg) => msg.id === aiMessage.id)
-          if (index === -1) {
-            updated.push(aiMessage)
-          } else {
-            updated[index] = { ...aiMessage }
-          }
-          return sortMessages(updated)
-        })
+        // 始终更新缓存，即使不是活跃会话也要保存
         setConversationCache(prev => {
           const next = new Map(prev)
           const existing = next.get(sessionConversationKey) || { messages: [], cursor: null }
@@ -649,7 +670,21 @@ function ChatPageContent() {
           }
           return next
         })
-        requestScrollToBottom('smooth')
+        
+        // 只有活跃会话才更新UI
+        if (isActiveSession()) {
+          setMessages(prev => {
+            const updated = [...prev]
+            const index = updated.findIndex((msg) => msg.id === aiMessage.id)
+            if (index === -1) {
+              updated.push(aiMessage)
+            } else {
+              updated[index] = { ...aiMessage }
+            }
+            return sortMessages(updated)
+          })
+          requestScrollToBottom('smooth')
+        }
       }
 
       updateAssistantMessage()
@@ -667,14 +702,16 @@ function ChatPageContent() {
           return next
         })
 
-        if (isActiveSession()) {
+        // 始终更新会话列表，即使不是活跃会话
+        const shouldUpdateConversation = isTemporaryConversation(sessionConversationKey)
+        if (shouldUpdateConversation || isActiveSession()) {
           setCurrentConversationId((prevId) => {
-            if (prevId && !isTemporaryConversation(prevId)) {
+            if (prevId && !isTemporaryConversation(prevId) && !shouldUpdateConversation) {
               return prevId
             }
             setConversations((prev) => {
               let updatedList = prev.map((conv) => {
-                if (prevId && isTemporaryConversation(prevId) && conv.id === prevId) {
+                if (shouldUpdateConversation && conv.id === sessionConversationKey) {
                   return {
                     ...conv,
                     id: payload.conversation_id,
@@ -684,7 +721,8 @@ function ChatPageContent() {
                 }
                 return conv
               })
-              if (!prevId) {
+              // 如果临时会话不在列表中，添加新会话
+              if (shouldUpdateConversation && !prev.find(c => c.id === sessionConversationKey) && !prev.find(c => c.id === payload.conversation_id)) {
                 updatedList = [
                   ...updatedList,
                   {
@@ -697,12 +735,13 @@ function ChatPageContent() {
               }
               return sortConversationsWithTemp(updatedList, isTemporaryConversation)
             })
-            return payload.conversation_id
+            if (shouldUpdateConversation || isActiveSession()) {
+              return payload.conversation_id
+            }
+            return prevId
           })
-          await fetchConversations(assistantSnapshot)
-        } else {
-          await fetchConversations(assistantSnapshot)
         }
+        await fetchConversations(assistantSnapshot)
       }
 
       const processChunk = async (chunk: string) => {
@@ -712,17 +751,17 @@ function ChatPageContent() {
           if (!line.startsWith('data: ')) continue
           const payload = line.slice(6)
           if (!payload || payload === '[DONE]') continue
-          try {
+            try {
             const jsonData = JSON.parse(payload)
-            if (jsonData.event === 'message') {
-              aiMessage.content += jsonData.answer || ''
+              if (jsonData.event === 'message') {
+                aiMessage.content += jsonData.answer || ''
               setAssistantTyping(false)
               updateAssistantMessage()
             }
-            if (jsonData.event === 'message_end') {
+              if (jsonData.event === 'message_end') {
               await handleMessageEnd(jsonData)
-            }
-          } catch (e) {
+              }
+            } catch (e) {
             // ignore malformed chunk
           }
         }
@@ -813,41 +852,41 @@ function ChatPageContent() {
               className="p-2 hover:bg-blue-600 rounded-lg transition-colors"
             >
               {leftSidebarCollapsed ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
-            </button>
-          </div>
+              </button>
+        </div>
 
           {!leftSidebarCollapsed && (
-            <div className="flex-1 overflow-y-auto">
-              {assistants.map((assistant) => {
-                const Icon = getIcon(assistant.icon_name)
-                const isActive = currentAssistant?.id === assistant.id
+        <div className="flex-1 overflow-y-auto">
+          {assistants.map((assistant) => {
+            const Icon = getIcon(assistant.icon_name)
+            const isActive = currentAssistant?.id === assistant.id
 
-                return (
-                  <button
-                    key={assistant.id}
-                    onClick={() => selectAssistant(assistant)}
+            return (
+              <button
+                key={assistant.id}
+                onClick={() => selectAssistant(assistant)}
                     className={`w-full p-4 flex flex-col items-center text-center space-y-2 hover:bg-blue-600 transition-colors ${
-                      isActive ? 'bg-blue-600' : ''
-                    }`}
-                    title={assistant.name}
-                  >
-                    <Icon className="w-8 h-8" />
+                  isActive ? 'bg-blue-600' : ''
+                }`}
+                title={assistant.name}
+              >
+                <Icon className="w-8 h-8" />
                     <span className="text-xs">{assistant.name}</span>
-                  </button>
-                )
-              })}
-            </div>
+              </button>
+            )
+          })}
+        </div>
           )}
 
-          <div className="p-4 border-t border-blue-600">
-            <button
-              onClick={handleLogout}
-              className="w-full flex items-center justify-center space-x-2 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg transition-colors"
-            >
-              <LogOut className="w-4 h-4" />
+        <div className="p-4 border-t border-blue-600">
+          <button
+            onClick={handleLogout}
+            className="w-full flex items-center justify-center space-x-2 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg transition-colors"
+          >
+            <LogOut className="w-4 h-4" />
               {!leftSidebarCollapsed && <span className="text-sm">退出登录</span>}
-            </button>
-          </div>
+          </button>
+        </div>
         </div>
         {!leftSidebarCollapsed && (
           <div
@@ -867,12 +906,12 @@ function ChatPageContent() {
             {!middleSidebarCollapsed && <h2 className="font-semibold text-gray-900">对话记录</h2>}
             <div className="flex items-center space-x-2">
               {!middleSidebarCollapsed && (
-                <button
-                  onClick={startNewConversation}
-                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                  title="开始新对话"
-                >
-                  <Plus className="w-5 h-5 text-gray-600" />
+            <button
+              onClick={startNewConversation}
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              title="开始新对话"
+            >
+              <Plus className="w-5 h-5 text-gray-600" />
                 </button>
               )}
               <button
@@ -880,7 +919,7 @@ function ChatPageContent() {
                 className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
               >
                 {middleSidebarCollapsed ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
-              </button>
+            </button>
             </div>
           </div>
 
@@ -891,48 +930,51 @@ function ChatPageContent() {
           )}
 
           {!middleSidebarCollapsed ? (
-            <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto">
               {conversations.map((conv) => {
                 const isTemp = isTemporaryConversation(conv.id)
                 return (
-                <div
-                  key={conv.id}
-                  className={`w-full p-4 hover:bg-gray-50 border-b border-gray-100 transition-colors ${
-                    currentConversationId === conv.id ? 'bg-blue-50' : ''
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <button onClick={() => loadConversation(conv.id)} className="text-left flex-1">
-                      <div className="font-medium text-sm text-gray-900 truncate">
-                        {editingConversationId === conv.id ? (
-                          <input
-                            autoFocus
-                            value={editingName}
-                            onChange={(e) => setEditingName(e.target.value)}
-                            onBlur={() => renameConversation(conv.id, editingName)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') renameConversation(conv.id, editingName)
-                              if (e.key === 'Escape') { setEditingConversationId(''); setEditingName('') }
-                            }}
-                            className="w-full px-2 py-1 border border-gray-300 rounded"
-                          />
-                        ) : (
+            <div
+              key={conv.id}
+              className={`w-full p-4 hover:bg-gray-50 border-b border-gray-100 transition-colors ${
+                currentConversationId === conv.id ? 'bg-blue-50' : ''
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <button onClick={() => loadConversation(conv.id)} className="text-left flex-1">
+                  <div className="font-medium text-sm text-gray-900 truncate">
+                    {editingConversationId === conv.id ? (
+                      <input
+                        autoFocus
+                        value={editingName}
+                        onChange={(e) => setEditingName(e.target.value)}
+                        onBlur={() => renameConversation(conv.id, editingName)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') renameConversation(conv.id, editingName)
+                          if (e.key === 'Escape') { setEditingConversationId(''); setEditingName('') }
+                        }}
+                        className="w-full px-2 py-1 border border-gray-300 rounded"
+                      />
+                    ) : (
                           <span>{isTemp ? '新的对话' : (conv.name || '新的对话')}</span>
-                        )}
-                      </div>
-                      <div className="text-xs text-gray-500 mt-1">
-                        {new Date(conv.updated_at * 1000).toLocaleString('zh-CN')}
-                      </div>
-                    </button>
-                    <div className="relative ml-2" onClick={(e) => e.stopPropagation()}>
-                      <button
+                    )}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {new Date(conv.updated_at * 1000).toLocaleString('zh-CN')}
+                  </div>
+                </button>
+                    <div className="relative ml-2" onClick={(e) => e.stopPropagation()} data-action-menu>
+                <button
                         className="p-2 hover:bg-gray-100 rounded-lg"
-                        onClick={() => setActionMenuId(prev => (prev === conv.id ? '' : conv.id))}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setActionMenuId(prev => (prev === conv.id ? '' : conv.id))
+                        }}
                       >
                         <MoreHorizontal className="w-4 h-4 text-gray-600" />
                       </button>
                       {actionMenuId === conv.id && (
-                        <div className="absolute right-0 mt-2 w-32 rounded-lg border border-gray-200 bg-white shadow-lg z-10">
+                        <div className="absolute right-0 mt-2 w-32 rounded-lg border border-gray-200 bg-white shadow-lg z-50">
                           <button
                             className={`w-full px-4 py-2 text-left text-sm ${isTemp ? 'text-gray-300 cursor-not-allowed' : 'hover:bg-gray-50 text-gray-700'}`}
                             disabled={isTemp}
@@ -950,20 +992,20 @@ function ChatPageContent() {
                             onClick={() => deleteConversation(conv.id)}
                           >
                             删除会话
-                          </button>
-                        </div>
+                </button>
+              </div>
                       )}
-                    </div>
+            </div>
                   </div>
                 </div>
               )})}
 
-              {conversations.length === 0 && (
-                <div className="p-8 text-center text-gray-500 text-sm">
-                  暂无对话记录
-                </div>
-              )}
+          {conversations.length === 0 && (
+            <div className="p-8 text-center text-gray-500 text-sm">
+              暂无对话记录
             </div>
+          )}
+        </div>
           ) : (
             <div className="flex-1 flex items-center justify-center text-gray-400 text-xs px-2 text-center">
               展开查看对话记录
@@ -981,16 +1023,16 @@ function ChatPageContent() {
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="bg-white border-b border-gray-200 p-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-semibold text-gray-900">
+            <div>
+              <h1 className="text-xl font-semibold text-gray-900">
               {currentAssistant ? currentAssistant.name : '请选择助手'}
-            </h1>
+              </h1>
             {currentAssistant && (
               <p className="text-sm text-gray-500">
                 {currentConversationId ? '对话进行中' : '开始输入以创建新的对话'}
               </p>
-            )}
-          </div>
+              )}
+            </div>
           <button
             onClick={() => router.push('/assistants')}
             className="flex items-center px-3 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
@@ -1045,9 +1087,9 @@ function ChatPageContent() {
                       </ReactMarkdown>
                     </div>
                   ) : (
-                    <div className="whitespace-pre-wrap break-words">
-                      {message.content}
-                    </div>
+                  <div className="whitespace-pre-wrap break-words">
+                    {message.content}
+                  </div>
                   )}
                 </div>
               </div>
