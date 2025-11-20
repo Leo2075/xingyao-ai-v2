@@ -68,7 +68,7 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
     const keyRef = (assistant as any).key_ref as string | undefined
     const bearerKey = (keyRef && process.env[keyRef]) || assistant.dify_api_key
     const userValue = userId ? `user-${userId}` : 'user-anon'
-    const difyUrl = `${assistant.dify_base_url}/conversations/${conversationId}?user=${encodeURIComponent(userValue)}`
+    const difyUrl = `${assistant.dify_base_url}/conversations/${conversationId}`
 
     const difyResponse = await fetch(difyUrl, {
       method: 'DELETE',
@@ -76,6 +76,7 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
         Authorization: `Bearer ${bearerKey}`,
         'Content-Type': 'application/json',
       },
+      body: JSON.stringify({ user: userValue }),
     })
 
     if (!difyResponse.ok) {
