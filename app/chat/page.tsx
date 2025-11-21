@@ -228,13 +228,13 @@ function ChatPageContent() {
 
   useEffect(() => {
     const assistantId = searchParams.get('assistantId')
-    if (assistantId && assistants.length > 0) {
+    if (assistantId && assistants.length > 0 && user) {
       const assistant = assistants.find(a => a.id === assistantId)
       if (assistant) {
         selectAssistant(assistant)
       }
     }
-  }, [searchParams, assistants])
+  }, [searchParams, assistants, user])
 
   useEffect(() => {
     if (!scrollIntentRef.current) return
@@ -405,6 +405,9 @@ function ChatPageContent() {
   }
 
   const fetchConversations = async (assistant: Assistant, showLoading = false) => {
+    // 确保有用户信息才获取会话，避免获取到匿名用户的会话
+    if (!user?.id) return
+
     try {
       if (showLoading) setConversationsLoading(true)
       const response = await fetch('/api/dify/conversations', {
