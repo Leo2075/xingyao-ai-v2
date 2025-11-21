@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
+const DEFAULT_LIMIT = 100
+
 export async function POST(request: NextRequest) {
   try {
-    const { assistantId, userId } = await request.json()
+    const { assistantId, userId, limit = DEFAULT_LIMIT } = await request.json()
 
     if (!assistantId) {
       return NextResponse.json(
@@ -12,7 +14,6 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 获取助手配置
     const { data: assistant, error } = await supabase
       .from('assistants')
       .select('*')
@@ -26,34 +27,34 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 调用Dify API获取对话列表
-    const keyRef = (assistant as any).key_ref as string | undefined
-    const bearerKey = (keyRef && process.env[keyRef]) || assistant.dify_api_key
-    const difyUrl = `${assistant.dify_base_url}/conversations`
-    const difyResponse = await fetch(
-      `${difyUrl}?user=${userId ? `user-${userId}` : 'user-anon'}&limit=20`,
-      {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${bearerKey}`,
-        },
-      }
-    )
+    const userIdentifier = userId ? `user-${userId}` : 'user-anon'
 
-    if (!difyResponse.ok) {
-      const errorText = await difyResponse.text()
-      console.error('Dify API错误:', errorText)
-      return NextResponse.json(
-        { conversations: [] },
-        { status: 200 }
-      )
+    const { data: localConversations, error: convError } = await supabase
+      .from('chat_conversations')
+      .select('id, title, created_at, updated_at')
+      .eq('assistant_id', assistantId)
+      .eq('user_id', userIdentifier)
+      .order('updated_at', { ascending: false })
+      .limit(Math.max(Number(limit) || DEFAULT_LIMIT, 1))
+
+    if (!convError && localConversations && localConversations.length > 0) {
+      const normalized = localConversations.map((item) => ({
+        id: item.id,
+        name: item.title || '未命名对话',
+        created_at: item.created_at,
+        updated_at: item.updated_at,
+      }))
+
+      return NextResponse.json({ conversations: normalized })
     }
 
-    const data = await difyResponse.json()
-    
-    return NextResponse.json({
-      conversations: data.data || [],
+    const fallback = await fetchFromDify({
+      assistant,
+      userIdentifier,
+      limit,
     })
+
+    return NextResponse.json(fallback)
   } catch (error) {
     console.error('获取对话列表错误:', error)
     return NextResponse.json(
@@ -61,4 +62,37 @@ export async function POST(request: NextRequest) {
       { status: 200 }
     )
   }
+}
+
+async function fetchFromDify({
+  assistant,
+  userIdentifier,
+  limit,
+}: {
+  assistant: Record<string, any>
+  userIdentifier: string
+  limit: number
+}) {
+  const keyRef = (assistant as any).key_ref as string | undefined
+  const bearerKey = (keyRef && process.env[keyRef]) || assistant.dify_api_key
+  const difyUrl = `${assistant.dify_base_url}/conversations`
+
+  const difyResponse = await fetch(
+    `${difyUrl}?user=${userIdentifier}&limit=${Math.max(Number(limit) || DEFAULT_LIMIT, 1)}`,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${bearerKey}`,
+      },
+    }
+  )
+
+  if (!difyResponse.ok) {
+    const errorText = await difyResponse.text()
+    console.error('Dify API错误:', errorText)
+    return { conversations: [] }
+  }
+
+  const data = await difyResponse.json()
+  return { conversations: data.data || [] }
 }
