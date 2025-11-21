@@ -40,6 +40,14 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     }
 
     const data = await difyResponse.json()
+
+    await syncConversationTitle({
+      conversationId,
+      assistantId,
+      userIdentifier: userValue,
+      title: name.trim(),
+    })
+
     return NextResponse.json({ conversation: data })
   } catch (e) {
     console.error('更新对话名称错误:', e)
@@ -89,5 +97,52 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
   } catch (e) {
     console.error('删除对话错误:', e)
     return NextResponse.json({ error: '服务器错误' }, { status: 500 })
+  }
+}
+
+async function syncConversationTitle({
+  conversationId,
+  assistantId,
+  userIdentifier,
+  title,
+}: {
+  conversationId: string
+  assistantId: string
+  userIdentifier: string
+  title: string
+}) {
+  try {
+    const nowIso = new Date().toISOString()
+
+    const { data: updated, error: updateError } = await supabase
+      .from('chat_conversations')
+      .update({ title, updated_at: nowIso })
+      .eq('id', conversationId)
+      .eq('user_id', userIdentifier)
+      .select('id')
+
+    if (updateError) {
+      console.error('更新会话标题失败:', updateError)
+      return
+    }
+
+    if (updated && updated.length > 0) {
+      return
+    }
+
+    const { error: insertError } = await supabase.from('chat_conversations').insert({
+      id: conversationId,
+      user_id: userIdentifier,
+      assistant_id: assistantId,
+      title,
+      created_at: nowIso,
+      updated_at: nowIso,
+    })
+
+    if (insertError) {
+      console.error('插入会话标题失败:', insertError)
+    }
+  } catch (err) {
+    console.error('同步会话标题异常:', err)
   }
 }

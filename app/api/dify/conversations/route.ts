@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
     if (!convError && localConversations && localConversations.length > 0) {
       const normalized = localConversations.map((item) => ({
         id: item.id,
-        name: item.title || '未命名对话',
+        name: item.title || '新的对话',
         created_at: item.created_at,
         updated_at: item.updated_at,
       }))
@@ -94,5 +94,60 @@ async function fetchFromDify({
   }
 
   const data = await difyResponse.json()
+
+  await syncConversationsFromDify({
+    items: data.data || [],
+    assistantId: assistant.id,
+    userIdentifier,
+  })
+
   return { conversations: data.data || [] }
+}
+
+async function syncConversationsFromDify({
+  items,
+  assistantId,
+  userIdentifier,
+}: {
+  items: any[]
+  assistantId: string
+  userIdentifier: string
+}) {
+  if (!items.length) return
+
+  const rows = items.map((item) => {
+    const createdAt = normalizeDate(item.created_at)
+    const updatedAt = normalizeDate(item.updated_at) || createdAt || new Date().toISOString()
+    return {
+      id: item.id,
+      title: item.name || null,
+      user_id: userIdentifier,
+      assistant_id: assistantId,
+      created_at: createdAt || new Date().toISOString(),
+      updated_at: updatedAt,
+    }
+  })
+
+  const { error } = await supabase
+    .from('chat_conversations')
+    .upsert(rows, { onConflict: 'id' })
+
+  if (error) {
+    console.error('同步Dify会话数据失败:', error)
+  }
+}
+
+function normalizeDate(value: string | number | null | undefined) {
+  if (value === null || value === undefined) return undefined
+
+  const date =
+    typeof value === 'number'
+      ? new Date(value < 1e12 ? value * 1000 : value)
+      : new Date(value)
+
+  if (Number.isNaN(date.getTime())) {
+    return undefined
+  }
+
+  return date.toISOString()
 }
