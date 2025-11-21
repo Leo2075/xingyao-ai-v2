@@ -318,18 +318,21 @@ function ChatPageContent() {
   }
 
   const getCachedConversations = (assistantId: string) => {
+    // 如果缓存中有数据且未过期，返回缓存
     const memory = conversationCacheRef.current.get(assistantId)
     const now = Date.now()
-    if (memory && now - memory.updatedAt < CONVERSATION_CACHE_TTL) {
+    if (memory && now - memory.updatedAt < CONVERSATION_CACHE_TTL && memory.data.length > 0) {
       return memory.data
     }
+    // 检查localStorage缓存
     if (typeof window !== 'undefined') {
       const key = `conv_cache_${assistantId}`
       const raw = localStorage.getItem(key)
       if (raw) {
         try {
           const parsed = JSON.parse(raw)
-          if (parsed?.data && parsed?.updatedAt && now - parsed.updatedAt < CONVERSATION_CACHE_TTL) {
+          // 只返回非空且未过期的缓存
+          if (parsed?.data && Array.isArray(parsed.data) && parsed.data.length > 0 && parsed?.updatedAt && now - parsed.updatedAt < CONVERSATION_CACHE_TTL) {
             conversationCacheRef.current.set(assistantId, parsed)
             return parsed.data as Conversation[]
           }
