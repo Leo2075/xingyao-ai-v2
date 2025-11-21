@@ -23,7 +23,8 @@ import {
   ChevronRight,
   Plus,
   LogOut,
-  MoreHorizontal
+  MoreHorizontal,
+  Square // Import stop icon
 } from 'lucide-react'
 
 const iconMap: { [key: string]: any } = {
@@ -168,6 +169,7 @@ function ChatPageContent() {
   const currentConversationIdRef = useRef<string>('')
   const activeStreamRef = useRef<{ id: string; assistantId: string } | null>(null)
   const menuRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  const abortControllerRef = useRef<AbortController | null>(null) // Ref for AbortController
   const router = useRouter()
   const searchParams = useSearchParams()
   const [user, setUser] = useState<any>(null)
@@ -592,24 +594,38 @@ function ChatPageContent() {
 
   const renameConversation = async (conversationId: string, name: string) => {
     if (!currentAssistant || !name.trim() || isTemporaryConversation(conversationId)) return
-    const oldConversations = conversations.map((c) => ({ ...c }))
-    setConversations(prev => prev.map(c => c.id === conversationId ? { ...c, name: name.trim() } as Conversation : c))
+    
+    // Optimistic update
+    const trimmedName = name.trim()
+    const oldConversations = [...conversations]
+    
+    setConversations(prev => prev.map(c => c.id === conversationId ? { ...c, name: trimmedName } as Conversation : c))
+    
+    // Reset editing state immediately for better UX
+    setEditingConversationId('')
+    setEditingName('')
+    setActionMenuId('')
+
     try {
       const response = await fetch(`/api/dify/conversations/${conversationId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ assistantId: currentAssistant.id, userId: user?.id, name: name.trim() }),
+        body: JSON.stringify({ assistantId: currentAssistant.id, userId: user?.id, name: trimmedName }),
       })
       if (!response.ok) throw new Error('更新失败')
-      await fetchConversations(currentAssistant)
+      // We don't need to refetch if successful, as we already updated optimistically
+      // But we might want to update the cache
+      const cached = conversationCacheRef.current.get(currentAssistant.id)
+      if (cached) {
+        const updatedCache = cached.data.map(c => c.id === conversationId ? { ...c, name: trimmedName } : c)
+        saveConversationCache(currentAssistant.id, updatedCache)
+      }
     } catch (e) {
+      // Revert on error
+      console.error('重命名失败:', e)
       setConversations(oldConversations)
-    } finally {
-      setEditingConversationId('')
-      setEditingName('')
-      setActionMenuId('')
     }
   }
 
@@ -661,6 +677,24 @@ function ChatPageContent() {
     }
   }
 
+  const stopGeneration = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+      abortControllerRef.current = null
+      setLoading(false)
+      setAssistantTyping(false)
+      
+      // Remove the partial message if it's empty, or keep it if it has content
+      setMessages(prev => {
+        const lastMsg = prev[prev.length - 1]
+        if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.content) {
+          return prev.slice(0, -1)
+        }
+        return prev
+      })
+    }
+  }
+
   const sendMessage = async () => {
     if (!inputMessage.trim() || !currentAssistant || loading) return
 
@@ -703,6 +737,9 @@ function ChatPageContent() {
     setLoading(true)
     setAssistantTyping(true)
 
+    // Initialize AbortController
+    abortControllerRef.current = new AbortController()
+
     try {
       const response = await fetch('/api/dify/chat', {
         method: 'POST',
@@ -716,6 +753,7 @@ function ChatPageContent() {
           userId: user?.id,
           inputs: advancedInputs,
         }),
+        signal: abortControllerRef.current.signal,
       })
 
       if (!response.ok) {
@@ -805,6 +843,10 @@ function ChatPageContent() {
             try {
             const jsonData = JSON.parse(payload)
               if (jsonData.event === 'message') {
+                // Smooth typing effect simulation
+                // Instead of appending the whole chunk, we could append it character by character
+                // But for simplicity and performance, we just append the chunk directly
+                // The key to smoothness is ensuring React updates are efficient
                 aiMessage.content += jsonData.answer || ''
               setAssistantTyping(false)
               updateAssistantMessage()
@@ -835,7 +877,11 @@ function ChatPageContent() {
         const chunk = decoder.decode(value, { stream: true })
         await processChunk(chunk)
       }
-    } catch (error) {
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        console.log('生成已停止')
+        return
+      }
       console.error('发送消息失败:', error)
       const fallbackMessage: Message = {
         id: Date.now().toString(),
@@ -847,6 +893,7 @@ function ChatPageContent() {
     } finally {
       setLoading(false)
       setAssistantTyping(false)
+      abortControllerRef.current = null
     }
   }
 
@@ -899,6 +946,13 @@ function ChatPageContent() {
 
   return (
     <div className="flex h-screen bg-gray-100 overflow-hidden">
+      {/* Static Resource Preloading */}
+      <head>
+        {assistants.map(a => (
+           <link key={a.id} rel="preload" as="image" href={`/icons/${a.icon_name}.svg`} />
+        ))}
+      </head>
+      
       {/* Left Sidebar */}
       <div className="flex h-full flex-shrink-0">
         <div
@@ -1225,15 +1279,26 @@ function ChatPageContent() {
                 onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
                 placeholder="输入您的问题..."
                 className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
-                disabled={loading}
+                disabled={loading && !abortControllerRef.current} // Disable input if loading but allow if can stop
               />
-              <button
-                onClick={sendMessage}
-                disabled={loading || !inputMessage.trim()}
-                className="p-3 bg-primary text-white rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Send className="w-5 h-5" />
-              </button>
+              
+              {loading && abortControllerRef.current ? (
+                 <button
+                  onClick={stopGeneration}
+                  className="p-3 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+                  title="停止生成"
+                >
+                  <Square className="w-5 h-5 fill-current" />
+                </button>
+              ) : (
+                <button
+                  onClick={sendMessage}
+                  disabled={loading || !inputMessage.trim()}
+                  className="p-3 bg-primary text-white rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Send className="w-5 h-5" />
+                </button>
+              )}
             </div>
             {/* 高级选项折叠区（简化版，每助手1-2项） */}
             <div className="max-w-4xl mx-auto mt-3">
