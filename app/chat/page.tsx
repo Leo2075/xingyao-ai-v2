@@ -151,8 +151,8 @@ function ChatPageContent() {
   const [advancedInputs, setAdvancedInputs] = useState<Record<string, any>>({})
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false)
   const [middleSidebarCollapsed, setMiddleSidebarCollapsed] = useState(false)
-  const [leftSidebarWidth, setLeftSidebarWidth] = useState(260)
-  const [middleSidebarWidth, setMiddleSidebarWidth] = useState(320)
+  const [leftSidebarWidth, setLeftSidebarWidth] = useState(220) // Optimized default width
+  const [middleSidebarWidth, setMiddleSidebarWidth] = useState(240) // Optimized default width
   const [isResizingLeft, setIsResizingLeft] = useState(false)
   const [isResizingMiddle, setIsResizingMiddle] = useState(false)
   const [assistantTyping, setAssistantTyping] = useState(false)
@@ -161,9 +161,10 @@ function ChatPageContent() {
   const [actionMenuId, setActionMenuId] = useState<string>('')
   const [conversationsLoading, setConversationsLoading] = useState(false)
   const conversationCacheRef = useRef<Map<string, { data: Conversation[]; updatedAt: number }>>(new Map())
-  const leftResizeState = useRef({ startX: 0, startWidth: 260 })
-  const middleResizeState = useRef({ startX: 0, startWidth: 320 })
+  const leftResizeState = useRef({ startX: 0, startWidth: 220 })
+  const middleResizeState = useRef({ startX: 0, startWidth: 240 })
   const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const loadingMoreRef = useRef(false)
   const scrollIntentRef = useRef<ScrollBehavior | null>(null)
   const currentConversationIdRef = useRef<string>('')
@@ -190,6 +191,22 @@ function ChatPageContent() {
       }
     })
   }
+
+  // Auto-resize textarea logic
+  const adjustTextareaHeight = () => {
+    const textarea = textareaRef.current
+    if (textarea) {
+      textarea.style.height = 'auto'
+      const maxHeight = 150 // Approx 6 lines
+      const newHeight = Math.min(textarea.scrollHeight, maxHeight)
+      textarea.style.height = `${newHeight}px`
+      textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden'
+    }
+  }
+
+  useEffect(() => {
+    adjustTextareaHeight()
+  }, [inputMessage])
 
   useEffect(() => {
     // 检查登录状态
@@ -257,7 +274,7 @@ function ChatPageContent() {
       }
       if (isResizingMiddle) {
         const delta = event.clientX - middleResizeState.current.startX
-        const newWidth = Math.min(Math.max(middleResizeState.current.startWidth + delta, 240), 480)
+        const newWidth = Math.min(Math.max(middleResizeState.current.startWidth + delta, 200), 480) // Allow narrower middle sidebar
         setMiddleSidebarWidth(newWidth)
       }
     }
@@ -1271,21 +1288,27 @@ function ChatPageContent() {
         {/* Input Area */}
         {currentAssistant && (
           <div className="bg-white border-t border-gray-200 p-4">
-            <div className="max-w-4xl mx-auto flex items-center space-x-4">
-              <input
-                type="text"
+            <div className="max-w-4xl mx-auto flex items-end space-x-4"> {/* Changed from items-center to items-end */}
+              <textarea
+                ref={textareaRef}
+                rows={1}
                 value={inputMessage}
                 onChange={(e) => setInputMessage(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    sendMessage()
+                  }
+                }}
                 placeholder="输入您的问题..."
-                className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
-                disabled={loading && !abortControllerRef.current} // Disable input if loading but allow if can stop
+                className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent outline-none resize-none overflow-hidden min-h-[46px]"
+                disabled={loading && !abortControllerRef.current}
               />
               
               {loading && abortControllerRef.current ? (
                  <button
                   onClick={stopGeneration}
-                  className="p-3 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+                  className="p-3 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors flex-shrink-0 h-[46px] flex items-center justify-center"
                   title="停止生成"
                 >
                   <Square className="w-5 h-5 fill-current" />
@@ -1294,13 +1317,13 @@ function ChatPageContent() {
                 <button
                   onClick={sendMessage}
                   disabled={loading || !inputMessage.trim()}
-                  className="p-3 bg-primary text-white rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="p-3 bg-primary text-white rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 h-[46px] flex items-center justify-center"
                 >
                   <Send className="w-5 h-5" />
                 </button>
               )}
             </div>
-            {/* 高级选项折叠区（简化版，每助手1-2项） */}
+            {/* 高级选项折叠区 */}
             <div className="max-w-4xl mx-auto mt-3">
               <details>
                 <summary className="cursor-pointer text-sm text-gray-600">高级选项</summary>
