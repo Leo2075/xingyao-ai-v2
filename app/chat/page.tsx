@@ -1030,7 +1030,7 @@ function ChatPageContent() {
             className="flex items-center px-3 py-1.5 text-sm text-gray-600 hover:text-primary hover:bg-blue-50 rounded-lg transition-all border border-gray-200 hover:border-blue-100"
           >
             <ChevronLeft className="w-4 h-4 mr-1" />
-            切换助手
+            返回首页
           </button>
         </div>
 
@@ -1046,7 +1046,7 @@ function ChatPageContent() {
                 <Brain className="w-10 h-10 text-gray-300" />
               </div>
               <h2 className="text-xl font-semibold text-gray-600 mb-2">欢迎使用星耀AI</h2>
-              <p>请从左侧选择一个助手开始创作</p>
+              <p>请从左侧选择一个AI助手开始创作</p>
             </div>
           ) : messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center animate-fade-in">
@@ -1054,7 +1054,7 @@ function ChatPageContent() {
                 <Sparkles className="w-8 h-8 text-white fill-white/20" />
               </div>
               <h2 className="text-2xl font-bold text-gray-900 mb-3">
-                我是{currentAssistant.name}
+                {currentAssistant.name}
               </h2>
               <p className="text-gray-500 mb-8 max-w-md text-center leading-relaxed">
                 {currentAssistant.description || '我是您的智能助手，随时为您提供专业的建议和内容创作支持。'}

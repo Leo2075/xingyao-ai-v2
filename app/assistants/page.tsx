@@ -120,10 +120,10 @@ export default function AssistantsPage() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
         <div className="text-center mb-12 animate-fade-in">
           <h1 className="text-3xl md:text-4xl font-bold text-gray-900 mb-4 tracking-tight">
-            选择您的 AI 创作伙伴
+            选择您的 AI 创作助手
           </h1>
           <p className="text-lg text-gray-500 max-w-2xl mx-auto">
-            从下方的专业助手库中选择一个，开始您的内容创作之旅。无论是短视频脚本还是账号定位，我们都能帮到您。
+            老板个人IP、创始人IP打造，适用于操盘手的专业文案AI创作平台
           </p>
         </div>
 
