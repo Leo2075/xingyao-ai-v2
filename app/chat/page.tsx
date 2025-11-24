@@ -495,7 +495,13 @@ function ChatPageContent() {
       if (currentConversationIdRef.current === conversationId) {
         setMessages(allMessages)
         setCurrentCursorRounds(cursorRounds > 0 ? cursorRounds : null)
-        requestScrollToBottom('auto')
+        // 使用 setTimeout 确保渲染完成后再滚动，且不使用 smooth
+        setTimeout(() => {
+          const container = messagesContainerRef.current
+          if (container) {
+            container.scrollTop = container.scrollHeight
+          }
+        }, 0)
       }
     } catch (error) {
       console.error('加载对话历史失败:', error)
@@ -848,7 +854,7 @@ function ChatPageContent() {
                 onClick={() => setLeftSidebarCollapsed(!leftSidebarCollapsed)}
                 className={`hidden md:flex p-2 hover:bg-white/50 rounded-xl transition-all text-slate-400 hover:text-slate-600 ${leftSidebarCollapsed ? 'mx-auto' : ''}`}
               >
-                {leftSidebarCollapsed ? <ChevronRight className="w-5 h-5" /> : <LayoutGrid className="w-5 h-5" />}
+                {leftSidebarCollapsed ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
              </button>
           </div>
 
@@ -865,15 +871,14 @@ function ChatPageContent() {
                   className={`
                     w-full p-3 flex items-center space-x-3 transition-all duration-300 group rounded-xl relative overflow-hidden
                     ${isActive 
-                      ? 'bg-white shadow-md shadow-blue-100 text-blue-600' 
+                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30' 
                       : 'text-slate-500 hover:bg-white/60 hover:text-slate-800'}
                   `}
                   title={assistant.name}
                 >
-                  {isActive && <div className="absolute inset-0 bg-gradient-to-r from-blue-50/50 to-transparent opacity-50" />}
                   <div className={`
                     relative w-10 h-10 rounded-lg flex items-center justify-center transition-all duration-300
-                    ${isActive ? 'bg-blue-100 text-blue-600 scale-105' : 'bg-slate-100 group-hover:bg-white text-slate-400 group-hover:text-blue-500'}
+                    ${isActive ? 'bg-white/20 text-white' : 'bg-slate-100 group-hover:bg-white text-slate-400 group-hover:text-blue-500'}
                   `}>
                     <Icon className="w-5 h-5" />
                   </div>
