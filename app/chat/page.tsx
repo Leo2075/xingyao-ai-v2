@@ -958,6 +958,7 @@ function ChatPageContent() {
                      ${currentConversationId === conv.id 
                        ? 'bg-white border-blue-100 shadow-sm ring-1 ring-blue-500/10' 
                        : 'hover:bg-gray-100'}
+                     ${actionMenuId === conv.id ? 'z-50' : 'z-0'}
                    `}
                    onClick={() => loadConversation(conv.id)}
                  >
@@ -984,7 +985,7 @@ function ChatPageContent() {
                       </button>
                       {/* Context Menu */}
                       {actionMenuId === conv.id && (
-                        <div className="mt-1 w-32 bg-white rounded-lg shadow-xl border border-gray-100 z-10 py-1 animate-fade-in">
+                        <div className="absolute top-full right-0 mt-1 w-32 bg-white rounded-lg shadow-xl border border-gray-100 z-50 py-1 animate-fade-in">
                           <button
                             className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
                             onClick={(e) => { e.stopPropagation(); renameConversation(conv.id, prompt('重命名', conv.name) || conv.name) }}
