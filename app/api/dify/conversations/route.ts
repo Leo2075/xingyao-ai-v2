@@ -29,6 +29,7 @@ export async function POST(request: NextRequest) {
 
     const userIdentifier = userId ? `user-${userId}` : 'user-anon'
 
+    // 查询本地数据
     const { data: localConversations, error: convError } = await supabase
       .from('chat_conversations')
       .select('id, title, created_at, updated_at')
@@ -37,17 +38,47 @@ export async function POST(request: NextRequest) {
       .order('updated_at', { ascending: false })
       .limit(Math.max(Number(limit) || DEFAULT_LIMIT, 1))
 
-    if (!convError && localConversations && localConversations.length > 0) {
-      const normalized = localConversations.map((item) => ({
-        id: item.id,
-        name: item.title || '新的对话',
-        created_at: item.created_at,
-        updated_at: item.updated_at,
-      }))
-
-      return NextResponse.json({ conversations: normalized })
+    if (convError) {
+      console.error('查询本地会话失败:', convError)
     }
 
+    // 优化：合并本地和Dify数据
+    if (localConversations && localConversations.length > 0) {
+      // 本地有数据，但可能不完整，尝试从Dify补充
+      const difyData = await fetchFromDify({
+        assistant,
+        userIdentifier,
+        limit,
+      }).catch(err => {
+        console.warn('获取Dify数据失败，仅返回本地数据:', err)
+        return { conversations: [] }
+      })
+
+      // 合并数据（本地优先，Dify补充）
+      const localMap = new Map(localConversations.map(c => [c.id, c]))
+      const difyConversations = (difyData.conversations || []).filter(
+        (c: any) => !localMap.has(c.id)
+      )
+
+      // 合并并排序
+      const merged = [
+        ...localConversations.map(item => ({
+          id: item.id,
+          name: item.title || '新的对话',
+          created_at: item.created_at,
+          updated_at: item.updated_at,
+        })),
+        ...difyConversations,
+      ].sort((a, b) => {
+        const aTime = new Date(a.updated_at || a.created_at).getTime()
+        const bTime = new Date(b.updated_at || b.created_at).getTime()
+        return bTime - aTime
+      }).slice(0, limit)
+
+      return NextResponse.json({ conversations: merged })
+    }
+
+    // 本地无数据，从Dify获取并同步
     const fallback = await fetchFromDify({
       assistant,
       userIdentifier,
@@ -58,7 +89,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('获取对话列表错误:', error)
     return NextResponse.json(
-      { conversations: [] },
+      { conversations: [], error: '获取对话列表失败' },
       { status: 200 }
     )
   }
@@ -95,10 +126,13 @@ async function fetchFromDify({
 
   const data = await difyResponse.json()
 
-  await syncConversationsFromDify({
+  // 同步到Supabase（后台操作，不阻塞响应）
+  syncConversationsFromDify({
     items: data.data || [],
     assistantId: assistant.id,
     userIdentifier,
+  }).catch(err => {
+    console.error('后台同步失败:', err)
   })
 
   return { conversations: data.data || [] }
@@ -120,7 +154,7 @@ async function syncConversationsFromDify({
     const updatedAt = normalizeDate(item.updated_at) || createdAt || new Date().toISOString()
     return {
       id: item.id,
-      title: item.name || null,
+      title: item.name || null, // 保持null，前端会处理
       user_id: userIdentifier,
       assistant_id: assistantId,
       created_at: createdAt || new Date().toISOString(),
@@ -134,6 +168,7 @@ async function syncConversationsFromDify({
 
   if (error) {
     console.error('同步Dify会话数据失败:', error)
+    throw error // 抛出错误以便上层处理
   }
 }
 

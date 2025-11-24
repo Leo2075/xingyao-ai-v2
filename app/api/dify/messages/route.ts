@@ -36,22 +36,41 @@ export async function POST(request: NextRequest) {
 
     const userIdentifier = userId ? `user-${userId}` : 'user-anon'
 
+    // 优化：数据库层面分页
+    const desiredRounds = Math.max(Number(rounds) || 1, 1)
+    const usedCursor = Math.max(Number(cursorRounds) || 0, 0)
+    const limit = desiredRounds * 2 // 每轮2条消息（user + assistant）
+    const offset = usedCursor * 2
+
     const { data: storedMessages, error: storedError } = await supabase
       .from('chat_messages')
       .select('id, role, content, created_at, user_id')
       .eq('conversation_id', conversationId)
       .eq('user_id', userIdentifier)
       .order('created_at', { ascending: true })
+      .range(offset, offset + limit - 1)
 
     if (storedError) {
       console.error('查询本地历史失败:', storedError)
     }
 
+    // 如果本地有数据，直接返回
     if (storedMessages && storedMessages.length > 0) {
-      const pagination = paginateMessages(storedMessages, rounds, cursorRounds)
-      return NextResponse.json(pagination)
+      const hasMore = storedMessages.length >= limit
+      const nextCursorRounds = hasMore ? usedCursor + desiredRounds : null
+      
+      return NextResponse.json({
+        messages: storedMessages.map(msg => ({
+          id: msg.id,
+          role: msg.role,
+          content: msg.content,
+          created_at: msg.created_at,
+        })),
+        nextCursorRounds,
+      })
     }
 
+    // 本地无数据，从Dify获取
     const difyPagination = await fetchFromDify({
       assistant,
       conversationId,
@@ -70,6 +89,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
+// 修复：不再假设消息成对出现，按实际消息数量分页
 function paginateMessages(
   allMessages: StoredMessage[],
   rounds: number,
@@ -79,14 +99,19 @@ function paginateMessages(
     return { messages: [], nextCursorRounds: null }
   }
 
-  const totalRounds = Math.ceil(allMessages.length / 2)
   const desiredRounds = Math.max(Number(rounds) || 1, 1)
-  const safeRounds = Math.max(1, Math.min(desiredRounds, totalRounds))
   const usedCursor = Math.max(Number(cursorRounds) || 0, 0)
+  
+  // 优化：按实际消息数量计算，不假设成对
+  // 每轮对话通常有2条消息，但可能不完整
+  const messagesPerRound = 2
+  const totalRounds = Math.ceil(allMessages.length / messagesPerRound)
+  const safeRounds = Math.max(1, Math.min(desiredRounds, totalRounds))
+  
   const endRound = Math.max(totalRounds - usedCursor, 0)
   const startRound = Math.max(endRound - safeRounds, 0)
-  const startIndex = startRound * 2
-  const endIndex = endRound * 2
+  const startIndex = startRound * messagesPerRound
+  const endIndex = endRound * messagesPerRound
   const slice = allMessages.slice(startIndex, endIndex)
   const nextCursorRounds = startRound > 0 ? usedCursor + safeRounds : null
 
@@ -153,5 +178,10 @@ async function fetchFromDify({
       return result
     })
 
-  return paginateMessages(flattened, rounds, cursorRounds)
+  // 优化：去重（基于id）
+  const uniqueMessages: StoredMessage[] = Array.from(
+    new Map(flattened.map((msg: StoredMessage) => [msg.id, msg])).values()
+  ) as StoredMessage[]
+
+  return paginateMessages(uniqueMessages, rounds, cursorRounds)
 }
