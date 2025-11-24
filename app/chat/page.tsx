@@ -24,7 +24,10 @@ import {
   Plus,
   LogOut,
   MoreHorizontal,
-  Square // Import stop icon
+  Square,
+  History,
+  Settings2,
+  Sparkles
 } from 'lucide-react'
 
 const iconMap: { [key: string]: any } = {
@@ -99,7 +102,7 @@ const markdownComponents: Components = {
   code({ inline, className, children, ...props }: any) {
     if (!inline) {
       return (
-        <pre className="bg-gray-900 text-gray-100 rounded-xl p-4 overflow-x-auto text-sm my-4">
+        <pre className="bg-slate-900 text-slate-100 rounded-lg p-4 overflow-x-auto text-sm my-4 border border-slate-700/50 shadow-sm">
           <code className={className} {...props}>
             {children}
           </code>
@@ -107,15 +110,15 @@ const markdownComponents: Components = {
       )
     }
     return (
-      <code className="bg-gray-100 text-gray-900 rounded px-1 py-0.5" {...props}>
+      <code className="bg-slate-100 text-slate-800 rounded px-1.5 py-0.5 font-mono text-sm" {...props}>
         {children}
       </code>
     )
   },
   table({ children }) {
     return (
-      <div className="overflow-x-auto my-4">
-        <table className="w-full border border-gray-200 text-sm">
+      <div className="overflow-x-auto my-4 rounded-lg border border-gray-200">
+        <table className="w-full text-sm">
           {children}
         </table>
       </div>
@@ -123,14 +126,14 @@ const markdownComponents: Components = {
   },
   th({ children }) {
     return (
-      <th className="border border-gray-200 bg-gray-50 px-3 py-2 text-left font-semibold text-gray-800">
+      <th className="bg-gray-50 px-4 py-3 text-left font-semibold text-gray-900 border-b border-gray-200">
         {children}
       </th>
     )
   },
   td({ children }) {
     return (
-      <td className="border border-gray-200 px-3 py-2 align-top text-gray-700">
+      <td className="px-4 py-3 border-b border-gray-100 text-gray-700 last:border-0">
         {children}
       </td>
     )
@@ -138,44 +141,55 @@ const markdownComponents: Components = {
 }
 
 function ChatPageContent() {
+  // State
   const [assistants, setAssistants] = useState<Assistant[]>([])
   const [currentAssistant, setCurrentAssistant] = useState<Assistant | null>(null)
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [currentConversationId, setCurrentConversationId] = useState<string>('')
   const [messages, setMessages] = useState<Message[]>([])
   const [currentCursorRounds, setCurrentCursorRounds] = useState<number | null>(null)
+  
+  // UI State
+  const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [showLoadMoreHint, setShowLoadMoreHint] = useState(false)
-  const [inputMessage, setInputMessage] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [advancedInputs, setAdvancedInputs] = useState<Record<string, any>>({})
+  const [assistantTyping, setAssistantTyping] = useState(false)
+  const [conversationsLoading, setConversationsLoading] = useState(false)
+  
+  // Layout State
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false)
   const [middleSidebarCollapsed, setMiddleSidebarCollapsed] = useState(false)
-  const [leftSidebarWidth, setLeftSidebarWidth] = useState(220) // Optimized default width
-  const [middleSidebarWidth, setMiddleSidebarWidth] = useState(240) // Optimized default width
-  const [isResizingLeft, setIsResizingLeft] = useState(false)
-  const [isResizingMiddle, setIsResizingMiddle] = useState(false)
-  const [assistantTyping, setAssistantTyping] = useState(false)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false)
+  
+  // Input State
+  const [inputMessage, setInputMessage] = useState('')
+  const [advancedInputs, setAdvancedInputs] = useState<Record<string, any>>({})
+  const [showAdvancedInputs, setShowAdvancedInputs] = useState(false)
+  
+  // Edit State
   const [editingConversationId, setEditingConversationId] = useState<string>('')
   const [editingName, setEditingName] = useState<string>('')
   const [actionMenuId, setActionMenuId] = useState<string>('')
-  const [conversationsLoading, setConversationsLoading] = useState(false)
+
+  // Refs
   const conversationCacheRef = useRef<Map<string, { data: Conversation[]; updatedAt: number }>>(new Map())
-  const leftResizeState = useRef({ startX: 0, startWidth: 220 })
-  const middleResizeState = useRef({ startX: 0, startWidth: 240 })
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const loadingMoreRef = useRef(false)
   const scrollIntentRef = useRef<ScrollBehavior | null>(null)
   const currentConversationIdRef = useRef<string>('')
   const activeStreamRef = useRef<{ id: string; assistantId: string } | null>(null)
-  const menuRefs = useRef<Map<string, HTMLDivElement>>(new Map())
-  const abortControllerRef = useRef<AbortController | null>(null) // Ref for AbortController
+  const menuRefs = useRef<Map<string, HTMLElement>>(new Map())
+  const abortControllerRef = useRef<AbortController | null>(null)
+  
   const router = useRouter()
   const searchParams = useSearchParams()
   const [user, setUser] = useState<any>(null)
+  
   const isTemporaryConversation = (id?: string) => Boolean(id && id.startsWith('temp-'))
 
+  // Scroll Helpers
   const requestScrollToBottom = (behavior: ScrollBehavior = 'auto') => {
     scrollIntentRef.current = behavior
   }
@@ -192,58 +206,38 @@ function ChatPageContent() {
     })
   }
 
-  // Auto-resize textarea logic
   const adjustTextareaHeight = () => {
     const textarea = textareaRef.current
     if (textarea) {
       textarea.style.height = 'auto'
-      const maxHeight = 150 // Approx 6 lines
+      const maxHeight = 120
       const newHeight = Math.min(textarea.scrollHeight, maxHeight)
       textarea.style.height = `${newHeight}px`
       textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden'
     }
   }
 
-  useEffect(() => {
-    adjustTextareaHeight()
-  }, [inputMessage])
+  // Effects
+  useEffect(() => { adjustTextareaHeight() }, [inputMessage])
 
   useEffect(() => {
-    // 检查登录状态
     const userData = localStorage.getItem('user')
     if (!userData) {
       router.push('/')
       return
     }
     setUser(JSON.parse(userData))
-    const storedLeftCollapsed = localStorage.getItem('chat_left_collapsed')
-    const storedLeftWidth = localStorage.getItem('chat_left_width')
-    const storedMiddleCollapsed = localStorage.getItem('chat_middle_collapsed')
-    const storedMiddleWidth = localStorage.getItem('chat_middle_width')
-    if (storedLeftCollapsed !== null) setLeftSidebarCollapsed(storedLeftCollapsed === '1')
-    if (storedLeftWidth) setLeftSidebarWidth(Number(storedLeftWidth))
-    if (storedMiddleCollapsed !== null) setMiddleSidebarCollapsed(storedMiddleCollapsed === '1')
-    if (storedMiddleWidth) setMiddleSidebarWidth(Number(storedMiddleWidth))
     
-    // 获取助手列表
+    // Restore sidebar state only on desktop
+    if (window.innerWidth >= 768) {
+      const storedLeft = localStorage.getItem('chat_left_collapsed')
+      if (storedLeft !== null) setLeftSidebarCollapsed(storedLeft === '1')
+      const storedMiddle = localStorage.getItem('chat_middle_collapsed')
+      if (storedMiddle !== null) setMiddleSidebarCollapsed(storedMiddle === '1')
+    }
+    
     fetchAssistants()
   }, [router])
-
-  useEffect(() => {
-    localStorage.setItem('chat_left_collapsed', leftSidebarCollapsed ? '1' : '0')
-  }, [leftSidebarCollapsed])
-
-  useEffect(() => {
-    localStorage.setItem('chat_left_width', String(leftSidebarWidth))
-  }, [leftSidebarWidth])
-
-  useEffect(() => {
-    localStorage.setItem('chat_middle_collapsed', middleSidebarCollapsed ? '1' : '0')
-  }, [middleSidebarCollapsed])
-
-  useEffect(() => {
-    localStorage.setItem('chat_middle_width', String(middleSidebarWidth))
-  }, [middleSidebarWidth])
 
   useEffect(() => {
     const assistantId = searchParams.get('assistantId')
@@ -266,37 +260,6 @@ function ChatPageContent() {
   }, [currentConversationId])
 
   useEffect(() => {
-    const handleMouseMove = (event: MouseEvent) => {
-      if (isResizingLeft) {
-        const delta = event.clientX - leftResizeState.current.startX
-        const newWidth = Math.min(Math.max(leftResizeState.current.startWidth + delta, 180), 400)
-        setLeftSidebarWidth(newWidth)
-      }
-      if (isResizingMiddle) {
-        const delta = event.clientX - middleResizeState.current.startX
-        const newWidth = Math.min(Math.max(middleResizeState.current.startWidth + delta, 200), 480) // Allow narrower middle sidebar
-        setMiddleSidebarWidth(newWidth)
-      }
-    }
-
-    const handleMouseUp = () => {
-      if (isResizingLeft) setIsResizingLeft(false)
-      if (isResizingMiddle) setIsResizingMiddle(false)
-    }
-
-    if (isResizingLeft || isResizingMiddle) {
-      document.addEventListener('mousemove', handleMouseMove)
-      document.addEventListener('mouseup', handleMouseUp)
-    }
-
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-    }
-  }, [isResizingLeft, isResizingMiddle])
-
-  // 点击外部关闭菜单
-  useEffect(() => {
     if (!actionMenuId) return
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as HTMLElement
@@ -305,52 +268,33 @@ function ChatPageContent() {
         setActionMenuId('')
       }
     }
-    // 使用 mousedown 事件，在 click 之前触发，避免冲突
     document.addEventListener('mousedown', handleClickOutside)
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-    }
+    return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [actionMenuId])
 
+  // Data Fetching Logic
   const fetchAssistants = async () => {
     try {
       const response = await fetch('/api/assistants')
       const data = await response.json()
-      if (response.ok) {
-        setAssistants(data.assistants)
-      }
+      if (response.ok) setAssistants(data.assistants)
     } catch (error) {
       console.error('获取助手列表失败:', error)
     }
   }
 
-  const handleLeftResizeMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
-    event.preventDefault()
-    leftResizeState.current = { startX: event.clientX, startWidth: leftSidebarWidth }
-    setIsResizingLeft(true)
-  }
-
-  const handleMiddleResizeMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
-    event.preventDefault()
-    middleResizeState.current = { startX: event.clientX, startWidth: middleSidebarWidth }
-    setIsResizingMiddle(true)
-  }
-
   const getCachedConversations = (assistantId: string) => {
-    // 如果缓存中有数据且未过期，返回缓存
     const memory = conversationCacheRef.current.get(assistantId)
     const now = Date.now()
     if (memory && now - memory.updatedAt < CONVERSATION_CACHE_TTL && memory.data.length > 0) {
       return memory.data
     }
-    // 检查localStorage缓存
     if (typeof window !== 'undefined') {
       const key = `conv_cache_${assistantId}`
       const raw = localStorage.getItem(key)
       if (raw) {
         try {
           const parsed = JSON.parse(raw)
-          // 只返回非空且未过期的缓存
           if (parsed?.data && Array.isArray(parsed.data) && parsed.data.length > 0 && parsed?.updatedAt && now - parsed.updatedAt < CONVERSATION_CACHE_TTL) {
             conversationCacheRef.current.set(assistantId, parsed)
             return parsed.data as Conversation[]
@@ -377,28 +321,15 @@ function ChatPageContent() {
   }
 
   const getPresetInputs = (assistant: Assistant) => {
+    // ... existing logic ...
     const name = assistant.name || ''
-    if (name === '原创选题文案策划') {
-      return { user: '' }
-    }
-    if (name.includes('IP') || name.includes('定位')) {
-      return { persona: '', audience: '' }
-    }
-    if (name.includes('脚本')) {
-      return { tone: '专业', duration: '60s' }
-    }
-    if (name.includes('选题') || name.includes('雷达')) {
-      return { platform: '抖音', industry: '' }
-    }
-    if (name.includes('话术')) {
-      return { tone: '接地气', cta: '私信' }
-    }
-    if (name.includes('剪辑')) {
-      return { bgm_style: '轻快', format: '分镜' }
-    }
-    if (name.includes('发布') || name.includes('策略')) {
-      return { best_slot: '晚间', hashtags_count: 5 }
-    }
+    if (name === '原创选题文案策划') return { user: '' }
+    if (name.includes('IP') || name.includes('定位')) return { persona: '', audience: '' }
+    if (name.includes('脚本')) return { tone: '专业', duration: '60s' }
+    if (name.includes('选题') || name.includes('雷达')) return { platform: '抖音', industry: '' }
+    if (name.includes('话术')) return { tone: '接地气', cta: '私信' }
+    if (name.includes('剪辑')) return { bgm_style: '轻快', format: '分镜' }
+    if (name.includes('发布') || name.includes('策略')) return { best_slot: '晚间', hashtags_count: 5 }
     return {}
   }
 
@@ -409,6 +340,7 @@ function ChatPageContent() {
     setCurrentConversationId('')
     const preset = getPresetInputs(assistant)
     setAdvancedInputs(preset)
+    setMobileMenuOpen(false) // Close mobile menu
 
     const cached = getCachedConversations(assistant.id)
     if (cached && cached.length > 0) {
@@ -427,22 +359,14 @@ function ChatPageContent() {
   }
 
   const fetchConversations = async (assistant: Assistant, showLoading = false) => {
-    // 确保有用户信息才获取会话，避免获取到匿名用户的会话
     if (!user?.id) return
-
     try {
       if (showLoading) setConversationsLoading(true)
       const response = await fetch('/api/dify/conversations', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          assistantId: assistant.id,
-          userId: user?.id,
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assistantId: assistant.id, userId: user?.id }),
       })
-
       const data = await response.json()
       if (response.ok && data.conversations) {
         const normalized: Conversation[] = data.conversations
@@ -470,6 +394,7 @@ function ChatPageContent() {
     }
   }
 
+  // Conversation & Message Logic (Same as before but simplified where possible)
   const fetchConversationMessages = async (
     conversationId: string,
     cursorRounds = 0,
@@ -480,9 +405,7 @@ function ChatPageContent() {
     try {
       const response = await fetch('/api/dify/messages', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           assistantId: currentAssistant.id,
           conversationId,
@@ -495,16 +418,13 @@ function ChatPageContent() {
       const data = await response.json()
       if (response.ok && data.messages) {
         const normalized = sortMessages(data.messages.map(normalizeMessage))
-
         if (currentConversationIdRef.current === conversationId) {
           if (mode === 'prepend') {
-            // 加载历史消息时，合并到现有消息前面
             setMessages(prev => {
               const existingIds = new Set(prev.map(m => m.id))
               const newMessages = normalized.filter(m => !existingIds.has(m.id))
               return sortMessages([...newMessages, ...prev])
             })
-            // 保持滚动位置
             if (scrollSnapshot) {
               requestAnimationFrame(() => {
                 const container = messagesContainerRef.current
@@ -514,7 +434,6 @@ function ChatPageContent() {
               })
             }
           } else {
-            // replace 模式：直接替换消息
             setMessages(normalized)
             requestScrollToBottom('auto')
           }
@@ -529,50 +448,41 @@ function ChatPageContent() {
   const loadConversation = async (conversationId: string) => {
     activeStreamRef.current = null
     if (!currentAssistant) return
-
     setCurrentConversationId(conversationId)
     currentConversationIdRef.current = conversationId
-    
-    // 清空消息，显示加载动画
     setMessages([])
     setCurrentCursorRounds(null)
     setAssistantTyping(false)
     setShowLoadMoreHint(false)
+    setMobileHistoryOpen(false) // Close mobile history
 
     if (isTemporaryConversation(conversationId)) return
 
-    // 显示加载动画并循环获取所有消息
     setLoading(true)
     try {
       let allMessages: Message[] = []
       let cursorRounds = 0
       let hasMore = true
       
-      // 循环加载直到获取所有消息
       while (hasMore) {
         const response = await fetch('/api/dify/messages', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             assistantId: currentAssistant.id,
             conversationId,
             userId: user?.id,
             cursorRounds,
-            rounds: 10, // 每次加载10轮以提高效率
+            rounds: 10,
           }),
         })
 
         const data = await response.json()
         if (response.ok && data.messages && data.messages.length > 0) {
           const normalized = sortMessages(data.messages.map(normalizeMessage))
-          // 合并消息，去重
           const existingIds = new Set(allMessages.map(m => m.id))
           const newMessages = normalized.filter(m => !existingIds.has(m.id))
           allMessages = sortMessages([...newMessages, ...allMessages])
-          
-          // 检查是否还有更多消息
           hasMore = data.nextCursorRounds != null
           cursorRounds = data.nextCursorRounds ?? 0
         } else {
@@ -580,7 +490,6 @@ function ChatPageContent() {
         }
       }
       
-      // 更新消息列表
       if (currentConversationIdRef.current === conversationId) {
         setMessages(allMessages)
         setCurrentCursorRounds(cursorRounds > 0 ? cursorRounds : null)
@@ -607,40 +516,30 @@ function ChatPageContent() {
     setMessages([])
     setCurrentCursorRounds(null)
     requestScrollToBottom('auto')
+    setMobileHistoryOpen(false)
   }
 
   const renameConversation = async (conversationId: string, name: string) => {
     if (!currentAssistant || !name.trim() || isTemporaryConversation(conversationId)) return
-    
-    // Optimistic update
     const trimmedName = name.trim()
     const oldConversations = [...conversations]
-    
     setConversations(prev => prev.map(c => c.id === conversationId ? { ...c, name: trimmedName } as Conversation : c))
-    
-    // Reset editing state immediately for better UX
     setEditingConversationId('')
     setEditingName('')
     setActionMenuId('')
 
     try {
-      const response = await fetch(`/api/dify/conversations/${conversationId}`, {
+      await fetch(`/api/dify/conversations/${conversationId}`, {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ assistantId: currentAssistant.id, userId: user?.id, name: trimmedName }),
       })
-      if (!response.ok) throw new Error('更新失败')
-      // We don't need to refetch if successful, as we already updated optimistically
-      // But we might want to update the cache
       const cached = conversationCacheRef.current.get(currentAssistant.id)
       if (cached) {
         const updatedCache = cached.data.map(c => c.id === conversationId ? { ...c, name: trimmedName } : c)
         saveConversationCache(currentAssistant.id, updatedCache)
       }
     } catch (e) {
-      // Revert on error
       console.error('重命名失败:', e)
       setConversations(oldConversations)
     }
@@ -651,11 +550,7 @@ function ChatPageContent() {
       setActionMenuId('')
       return
     }
-
-    // 保存当前列表，以便删除失败时恢复
     const previousConversations = conversations
-    
-    // 先从前端列表中移除，提供即时反馈
     setConversations(prev => prev.filter(c => c.id !== conversationId))
 
     if (currentConversationId === conversationId) {
@@ -668,24 +563,14 @@ function ChatPageContent() {
     try {
       const response = await fetch(`/api/dify/conversations/${conversationId}`, {
         method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ assistantId: currentAssistant.id, userId: user?.id }),
       })
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.error || '删除失败')
-      }
-      
-      // 删除成功后，刷新对话列表以确保同步
+      if (!response.ok) throw new Error('删除失败')
       await fetchConversations(currentAssistant)
     } catch (error) {
       console.error('删除对话失败:', error)
-      // 删除失败时，恢复之前的列表
       setConversations(previousConversations)
-      // 如果删除的是当前对话，恢复当前对话ID
       if (currentConversationId === conversationId) {
         setCurrentConversationId(conversationId)
       }
@@ -700,8 +585,6 @@ function ChatPageContent() {
       abortControllerRef.current = null
       setLoading(false)
       setAssistantTyping(false)
-      
-      // Remove the partial message if it's empty, or keep it if it has content
       setMessages(prev => {
         const lastMsg = prev[prev.length - 1]
         if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.content) {
@@ -754,15 +637,12 @@ function ChatPageContent() {
     setLoading(true)
     setAssistantTyping(true)
 
-    // Initialize AbortController
     abortControllerRef.current = new AbortController()
 
     try {
       const response = await fetch('/api/dify/chat', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           assistantId: currentAssistant.id,
           message: inputMessage,
@@ -773,9 +653,7 @@ function ChatPageContent() {
         signal: abortControllerRef.current.signal,
       })
 
-      if (!response.ok) {
-        throw new Error('发送消息失败')
-      }
+      if (!response.ok) throw new Error('发送消息失败')
 
       const decoder = new TextDecoder()
       let aiMessage: Message = {
@@ -786,16 +664,12 @@ function ChatPageContent() {
       }
 
       const updateAssistantMessage = () => {
-        // 只有活跃会话才更新UI
         if (isActiveSession()) {
           setMessages(prev => {
             const updated = [...prev]
             const index = updated.findIndex((msg) => msg.id === aiMessage.id)
-            if (index === -1) {
-              updated.push(aiMessage)
-            } else {
-              updated[index] = { ...aiMessage }
-            }
+            if (index === -1) updated.push(aiMessage)
+            else updated[index] = { ...aiMessage }
             return sortMessages(updated)
           })
           requestScrollToBottom('smooth')
@@ -807,8 +681,6 @@ function ChatPageContent() {
       const handleMessageEnd = async (payload: any) => {
         if (!payload?.conversation_id || !assistantSnapshot) return
         const resolvedName = payload.conversation_name || payload.conversation?.name || '新的对话'
-
-        // 始终更新会话列表，即使不是活跃会话
         const shouldUpdateConversation = isTemporaryConversation(sessionConversationKey)
         setCurrentConversationId((prevId) => {
           const isCurrentSession = prevId === sessionConversationKey || prevId === payload.conversation_id
@@ -816,37 +688,19 @@ function ChatPageContent() {
             setConversations((prev) => {
               let updatedList = prev.map((conv) => {
                 if (shouldUpdateConversation && conv.id === sessionConversationKey) {
-                  return {
-                    ...conv,
-                    id: payload.conversation_id,
-                    name: resolvedName,
-                    updated_at: toSeconds(Date.now()),
-                  }
+                  return { ...conv, id: payload.conversation_id, name: resolvedName, updated_at: toSeconds(Date.now()) }
                 }
                 return conv
               })
-              // 如果临时会话不在列表中，添加新会话
               if (shouldUpdateConversation && !prev.find(c => c.id === sessionConversationKey) && !prev.find(c => c.id === payload.conversation_id)) {
-                updatedList = [
-                  ...updatedList,
-                  {
-                    id: payload.conversation_id,
-                    name: resolvedName,
-                    created_at: toSeconds(Date.now()),
-                    updated_at: toSeconds(Date.now()),
-                  },
-                ]
+                updatedList = [...updatedList, { id: payload.conversation_id, name: resolvedName, created_at: toSeconds(Date.now()), updated_at: toSeconds(Date.now()) }]
               }
               return sortConversationsWithTemp(updatedList, isTemporaryConversation)
             })
-            if (shouldUpdateConversation || isCurrentSession) {
-              return payload.conversation_id
-            }
+            if (shouldUpdateConversation || isCurrentSession) return payload.conversation_id
           }
           return prevId
         })
-        
-        // 刷新会话列表
         await fetchConversations(assistantSnapshot)
       }
 
@@ -857,34 +711,22 @@ function ChatPageContent() {
           if (!line.startsWith('data: ')) continue
           const payload = line.slice(6)
           if (!payload || payload === '[DONE]') continue
-            try {
+          try {
             const jsonData = JSON.parse(payload)
-              if (jsonData.event === 'message') {
-                // Smooth typing effect simulation
-                // Instead of appending the whole chunk, we could append it character by character
-                // But for simplicity and performance, we just append the chunk directly
-                // The key to smoothness is ensuring React updates are efficient
-                aiMessage.content += jsonData.answer || ''
+            if (jsonData.event === 'message') {
+              aiMessage.content += jsonData.answer || ''
               setAssistantTyping(false)
               updateAssistantMessage()
             }
-              if (jsonData.event === 'message_end') {
-              await handleMessageEnd(jsonData)
-              }
-            } catch (e) {
-            // ignore malformed chunk
-          }
+            if (jsonData.event === 'message_end') await handleMessageEnd(jsonData)
+          } catch (e) {}
         }
       }
 
       const reader = response.body?.getReader()
       if (!reader) {
         const fallbackText = await response.text()
-        if (fallbackText) {
-          await processChunk(fallbackText)
-        } else {
-          throw new Error('无法读取响应流')
-        }
+        if (fallbackText) await processChunk(fallbackText)
         return
       }
 
@@ -895,10 +737,7 @@ function ChatPageContent() {
         await processChunk(chunk)
       }
     } catch (error: any) {
-      if (error.name === 'AbortError') {
-        console.log('生成已停止')
-        return
-      }
+      if (error.name === 'AbortError') return
       console.error('发送消息失败:', error)
       const fallbackMessage: Message = {
         id: Date.now().toString(),
@@ -918,10 +757,7 @@ function ChatPageContent() {
     if (!currentConversationId || currentCursorRounds == null || loadingMoreRef.current || isTemporaryConversation(currentConversationId)) return
     const container = messagesContainerRef.current
     if (!container) return
-    const snapshot = {
-      height: container.scrollHeight,
-      top: container.scrollTop,
-    }
+    const snapshot = { height: container.scrollHeight, top: container.scrollTop }
     loadingMoreRef.current = true
     setLoadingMore(true)
     try {
@@ -938,11 +774,8 @@ function ChatPageContent() {
       setShowLoadMoreHint(false)
       return
     }
-    
-    // 如果还有更多历史消息，显示提示
     if (currentCursorRounds != null && container.scrollTop <= 100) {
       setShowLoadMoreHint(true)
-      // 继续滚动时触发加载
       if (container.scrollTop <= 40 && !loadingMoreRef.current) {
         loadMoreMessages()
       }
@@ -956,390 +789,406 @@ function ChatPageContent() {
     router.push('/')
   }
 
-  const getIcon = (iconName?: string) => {
-    if (!iconName) return Brain
-    return iconMap[iconName] || Brain
-  }
+  const getIcon = (iconName?: string) => iconMap[iconName || 'brain'] || Brain
+
+  // --- Render Helpers ---
 
   return (
-    <div className="flex h-screen bg-gray-100 overflow-hidden">
-      {/* Static Resource Preloading */}
+    <div className="flex h-[100dvh] bg-gray-50 overflow-hidden font-sans text-gray-900">
       <head>
         {assistants.map(a => (
            <link key={a.id} rel="preload" as="image" href={`/icons/${a.icon_name}.svg`} />
         ))}
       </head>
-      
-      {/* Left Sidebar */}
-      <div className="flex h-full flex-shrink-0">
-        <div
-          className="bg-blue-700 text-white flex flex-col transition-all duration-200 overflow-hidden"
-          style={{ width: leftSidebarCollapsed ? 56 : leftSidebarWidth }}
+
+      {/* Mobile Header */}
+      <div className="md:hidden fixed top-0 left-0 right-0 h-16 bg-white/80 backdrop-blur-md border-b border-gray-200 z-50 flex items-center justify-between px-4">
+        <button 
+          onClick={() => setMobileMenuOpen(true)}
+          className="p-2 -ml-2 text-gray-700 active:scale-95 transition-transform"
         >
-          <div className={`p-4 border-b border-blue-600 flex items-center ${leftSidebarCollapsed ? 'justify-center' : 'justify-between'}`}>
-            {!leftSidebarCollapsed && <span className="font-semibold">助手列表</span>}
-            <button
-              onClick={() => setLeftSidebarCollapsed(!leftSidebarCollapsed)}
-              className="p-2 hover:bg-blue-600 rounded-lg transition-colors"
-            >
-              {leftSidebarCollapsed ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
-              </button>
-        </div>
-
-          {!leftSidebarCollapsed && (
-        <div className="flex-1 overflow-y-auto">
-          {assistants.map((assistant) => {
-            const Icon = getIcon(assistant.icon_name)
-            const isActive = currentAssistant?.id === assistant.id
-
-            return (
-              <button
-                key={assistant.id}
-                onClick={() => selectAssistant(assistant)}
-                    className={`w-full p-4 flex flex-col items-center text-center space-y-2 hover:bg-blue-600 transition-colors ${
-                  isActive ? 'bg-blue-600' : ''
-                }`}
-                title={assistant.name}
-              >
-                <Icon className="w-8 h-8" />
-                    <span className="text-xs">{assistant.name}</span>
-              </button>
-            )
-          })}
-        </div>
-          )}
-
-        <div className="p-4 border-t border-blue-600">
-          <button
-            onClick={handleLogout}
-            className="w-full flex items-center justify-center space-x-2 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg transition-colors"
-          >
-            <LogOut className="w-4 h-4" />
-              {!leftSidebarCollapsed && <span className="text-sm">退出登录</span>}
-          </button>
-        </div>
-        </div>
-        {!leftSidebarCollapsed && (
-          <div
-            className={`w-1 cursor-col-resize bg-transparent hover:bg-blue-200 transition-colors ${isResizingLeft ? 'bg-blue-300' : ''}`}
-            onMouseDown={handleLeftResizeMouseDown}
-          />
-        )}
+          <Menu className="w-6 h-6" />
+        </button>
+        <span className="font-semibold text-gray-900 truncate max-w-[200px]">
+          {currentAssistant ? currentAssistant.name : '星耀AI'}
+        </span>
+        <button 
+          onClick={() => setMobileHistoryOpen(true)}
+          className="p-2 -mr-2 text-gray-700 active:scale-95 transition-transform"
+        >
+          <History className="w-6 h-6" />
+        </button>
       </div>
 
-      {/* Middle Sidebar */}
-      <div className="flex h-full flex-shrink-0 border-r border-gray-200">
-        <div
-          className="bg-white flex flex-col transition-all duration-200 overflow-hidden"
-          style={{ width: middleSidebarCollapsed ? 56 : middleSidebarWidth }}
-        >
-          <div className={`p-4 border-b border-gray-200 flex items-center ${middleSidebarCollapsed ? 'justify-center' : 'justify-between'}`}>
-            {!middleSidebarCollapsed && <h2 className="font-semibold text-gray-900">对话记录</h2>}
-            <div className="flex items-center space-x-2">
-              {!middleSidebarCollapsed && (
-            <button
-              onClick={startNewConversation}
-              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-              title="开始新对话"
-            >
-              <Plus className="w-5 h-5 text-gray-600" />
-                </button>
-              )}
-              <button
-                onClick={() => setMiddleSidebarCollapsed(!middleSidebarCollapsed)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+      {/* Left Sidebar (Assistants) */}
+      <div className={`
+        fixed inset-0 z-50 transform transition-transform duration-300 ease-in-out md:relative md:translate-x-0 md:z-0
+        ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}
+        md:flex md:flex-col md:h-full md:flex-shrink-0
+      `}>
+        <div className="absolute inset-0 bg-black/50 md:hidden" onClick={() => setMobileMenuOpen(false)} />
+        <div className={`
+          relative w-72 md:w-auto h-full bg-slate-900 text-white flex flex-col shadow-2xl md:shadow-none
+          md:transition-all md:duration-300
+        `} style={{ width: window.innerWidth >= 768 ? (leftSidebarCollapsed ? 64 : 260) : 280 }}>
+          
+          {/* Sidebar Header */}
+          <div className="p-4 flex items-center justify-between border-b border-slate-800/50 h-16">
+             {!leftSidebarCollapsed && (
+               <div className="flex items-center space-x-2 font-bold text-lg tracking-tight">
+                 <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
+                   <Brain className="w-5 h-5 text-white" />
+                 </div>
+                 <span>星耀AI</span>
+               </div>
+             )}
+             <button
+                onClick={() => setLeftSidebarCollapsed(!leftSidebarCollapsed)}
+                className="hidden md:flex p-1.5 hover:bg-slate-800 rounded-md transition-colors text-slate-400 hover:text-white"
               >
-                {middleSidebarCollapsed ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
-            </button>
-            </div>
+                {leftSidebarCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+             </button>
           </div>
 
-          {!middleSidebarCollapsed && currentAssistant && (
-            <div className="px-4 py-2 text-sm text-gray-600 border-b border-gray-100">
-              <span className="font-medium text-primary">{currentAssistant.name}</span>
-            </div>
-          )}
-
-          {!middleSidebarCollapsed ? (
-            <div className="flex-1 overflow-y-auto">
-              {conversationsLoading ? (
-                <div className="p-6 space-y-4">
-                  {[1, 2, 3].map((item) => (
-                    <div key={item} className="animate-pulse">
-                      <div className="h-4 bg-gray-200 rounded w-1/3 mb-3"></div>
-                      <div className="h-3 bg-gray-100 rounded w-1/2"></div>
-                      <div className="h-[1px] bg-gray-100 mt-4"></div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <>
-                  {conversations.map((conv) => {
-                const isTemp = isTemporaryConversation(conv.id)
-                return (
-            <div
-              key={conv.id}
-              className={`w-full p-4 hover:bg-gray-50 border-b border-gray-100 transition-colors ${
-                currentConversationId === conv.id ? 'bg-blue-50' : ''
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <button onClick={() => loadConversation(conv.id)} className="text-left flex-1">
-                  <div className="font-medium text-sm text-gray-900 truncate">
-                    {editingConversationId === conv.id ? (
-                      <input
-                        autoFocus
-                        value={editingName}
-                        onChange={(e) => setEditingName(e.target.value)}
-                        onBlur={() => renameConversation(conv.id, editingName)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') renameConversation(conv.id, editingName)
-                          if (e.key === 'Escape') { setEditingConversationId(''); setEditingName('') }
-                        }}
-                        className="w-full px-2 py-1 border border-gray-300 rounded"
-                      />
-                    ) : (
-                          <span>{isTemp ? '新的对话' : (conv.name || '新的对话')}</span>
-                    )}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    {new Date(conv.updated_at * 1000).toLocaleString('zh-CN')}
-                  </div>
-                </button>
-                    <div 
-                      className="relative ml-2" 
-                      ref={(el) => {
-                        if (el) {
-                          menuRefs.current.set(conv.id, el)
-                        } else {
-                          menuRefs.current.delete(conv.id)
-                        }
-                      }}
-                    >
+          {/* Assistant List */}
+          <div className="flex-1 overflow-y-auto py-2 custom-scrollbar">
+            {assistants.map((assistant) => {
+              const Icon = getIcon(assistant.icon_name)
+              const isActive = currentAssistant?.id === assistant.id
+              
+              return (
                 <button
-                        type="button"
-                        className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setActionMenuId(prev => (prev === conv.id ? '' : conv.id))
-                        }}
-                      >
-                        <MoreHorizontal className="w-4 h-4 text-gray-600" />
-                      </button>
-                      {actionMenuId === conv.id && (
-                        <div 
-                          className="absolute right-0 mt-1 w-32 rounded-lg border border-gray-200 bg-white shadow-xl z-[100]" 
-                          onMouseDown={(e) => e.stopPropagation()}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <button
-                            className={`w-full px-4 py-2 text-left text-sm ${isTemp ? 'text-gray-300 cursor-not-allowed' : 'hover:bg-gray-50 text-gray-700'}`}
-                            disabled={isTemp}
-                            onClick={() => {
-                              if (isTemp) return
-                              setEditingConversationId(conv.id)
-                              setEditingName(conv.name || '')
-                              setActionMenuId('')
-                            }}
-                          >
-                            重命名
-                          </button>
-                          <button
-                            className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-                            onClick={() => deleteConversation(conv.id)}
-                          >
-                            删除会话
-                </button>
-              </div>
-                      )}
-            </div>
+                  key={assistant.id}
+                  onClick={() => selectAssistant(assistant)}
+                  className={`
+                    w-full px-3 py-3 flex items-center space-x-3 transition-all duration-200 group
+                    ${isActive 
+                      ? 'bg-blue-600/10 border-r-2 border-blue-500 text-white' 
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/50 border-r-2 border-transparent'}
+                  `}
+                  title={assistant.name}
+                >
+                  <div className={`
+                    w-8 h-8 rounded-lg flex items-center justify-center transition-colors
+                    ${isActive ? 'bg-blue-600 text-white' : 'bg-slate-800 group-hover:bg-slate-700 text-slate-400 group-hover:text-white'}
+                  `}>
+                    <Icon className="w-5 h-5" />
                   </div>
-                </div>
-                  )})}
-
-                  {conversations.length === 0 && (
-                    <div className="p-8 text-center text-gray-500 text-sm">
-                      暂无对话记录
-                    </div>
+                  {!leftSidebarCollapsed && (
+                    <span className="text-sm font-medium truncate flex-1 text-left animate-fade-in">
+                      {assistant.name}
+                    </span>
                   )}
-                </>
-              )}
-            </div>
-          ) : (
-            <div className="flex-1 flex items-center justify-center text-gray-400 text-xs px-2 text-center">
-              展开查看对话记录
-            </div>
-          )}
+                </button>
+              )
+            })}
+          </div>
+
+          {/* User Profile / Logout */}
+          <div className="p-4 border-t border-slate-800/50 bg-slate-900/50 backdrop-blur-sm">
+            <button
+              onClick={handleLogout}
+              className={`
+                w-full flex items-center space-x-3 p-2 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-red-400 transition-colors
+                ${leftSidebarCollapsed ? 'justify-center' : ''}
+              `}
+            >
+              <LogOut className="w-5 h-5" />
+              {!leftSidebarCollapsed && <span className="text-sm font-medium">退出登录</span>}
+            </button>
+          </div>
         </div>
-        {!middleSidebarCollapsed && (
-          <div
-            className={`w-1 cursor-col-resize bg-transparent hover:bg-gray-200 transition-colors ${isResizingMiddle ? 'bg-gray-300' : ''}`}
-            onMouseDown={handleMiddleResizeMouseDown}
-          />
-        )}
+      </div>
+
+      {/* Middle Sidebar (History) */}
+      <div className={`
+        fixed inset-y-0 right-0 z-50 w-80 transform transition-transform duration-300 ease-in-out bg-white shadow-2xl
+        md:relative md:translate-x-0 md:z-0 md:shadow-none md:border-r md:border-gray-200
+        ${mobileHistoryOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'}
+        flex flex-col
+      `} style={{ width: window.innerWidth >= 768 ? (middleSidebarCollapsed ? 0 : 280) : 300, display: (window.innerWidth >= 768 && middleSidebarCollapsed) ? 'none' : 'flex' }}>
+         <div className="h-16 px-4 border-b border-gray-100 flex items-center justify-between bg-white/50 backdrop-blur-sm">
+           <h2 className="font-semibold text-gray-800 flex items-center">
+             <History className="w-4 h-4 mr-2 text-gray-500" />
+             对话历史
+           </h2>
+           <div className="flex items-center space-x-1">
+             <button
+               onClick={startNewConversation}
+               className="p-1.5 hover:bg-gray-100 rounded-md transition-colors text-primary"
+               title="新对话"
+             >
+               <Plus className="w-5 h-5" />
+             </button>
+             <button
+               onClick={() => setMobileHistoryOpen(false)}
+               className="md:hidden p-1.5 hover:bg-gray-100 rounded-md transition-colors"
+             >
+               <X className="w-5 h-5" />
+             </button>
+             <button
+               onClick={() => setMiddleSidebarCollapsed(!middleSidebarCollapsed)}
+               className="hidden md:flex p-1.5 hover:bg-gray-100 rounded-md transition-colors text-gray-500"
+             >
+               <ChevronLeft className="w-4 h-4" />
+             </button>
+           </div>
+         </div>
+
+         <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
+            {conversationsLoading ? (
+               [1,2,3].map(i => (
+                 <div key={i} className="h-16 bg-gray-100 animate-pulse rounded-lg" />
+               ))
+            ) : conversations.length > 0 ? (
+               conversations.map(conv => (
+                 <div
+                   key={conv.id}
+                   className={`
+                     group relative p-3 rounded-xl transition-all duration-200 cursor-pointer border border-transparent
+                     ${currentConversationId === conv.id 
+                       ? 'bg-white border-blue-100 shadow-sm ring-1 ring-blue-500/10' 
+                       : 'hover:bg-gray-100'}
+                   `}
+                   onClick={() => loadConversation(conv.id)}
+                 >
+                   <div className="flex justify-between items-start">
+                     <h3 className={`text-sm font-medium line-clamp-1 pr-6 ${currentConversationId === conv.id ? 'text-primary' : 'text-gray-700'}`}>
+                       {conv.name || '新的对话'}
+                     </h3>
+                     {/* Menu Button */}
+                     <button
+                       className={`
+                         absolute right-2 top-3 p-1 rounded-md hover:bg-gray-200 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity
+                         ${actionMenuId === conv.id ? 'opacity-100 bg-gray-200' : ''}
+                       `}
+                       onClick={(e) => {
+                         e.stopPropagation()
+                         setActionMenuId(prev => prev === conv.id ? '' : conv.id)
+                       }}
+                       ref={(el) => { if(el) menuRefs.current.set(conv.id, el) }}
+                     >
+                       <MoreHorizontal className="w-4 h-4" />
+                     </button>
+                   </div>
+                   <span className="text-xs text-gray-400 mt-1 block">
+                     {new Date(conv.updated_at * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                   </span>
+                   
+                   {/* Context Menu */}
+                   {actionMenuId === conv.id && (
+                     <div className="absolute right-0 top-8 w-32 bg-white rounded-lg shadow-xl border border-gray-100 z-10 py-1 animate-fade-in">
+                       <button
+                         className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
+                         onClick={(e) => { e.stopPropagation(); renameConversation(conv.id, prompt('重命名', conv.name) || conv.name) }}
+                       >
+                         重命名
+                       </button>
+                       <button
+                         className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                         onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id) }}
+                       >
+                         删除
+                       </button>
+                     </div>
+                   )}
+                 </div>
+               ))
+            ) : (
+              <div className="text-center text-gray-400 text-sm py-8">
+                暂无历史记录
+              </div>
+            )}
+         </div>
       </div>
 
       {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="bg-white border-b border-gray-200 p-4 flex items-center justify-between">
-            <div>
-              <h1 className="text-xl font-semibold text-gray-900">
-              {currentAssistant ? currentAssistant.name : '请选择助手'}
-              </h1>
-            {currentAssistant && (
-              <p className="text-sm text-gray-500">
-                {currentConversationId ? '对话进行中' : '开始输入以创建新的对话'}
-              </p>
-              )}
-            </div>
-          <button
-            onClick={() => router.push('/assistants')}
-            className="flex items-center px-3 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4 mr-1" />
-            返回助手列表
-          </button>
-        </div>
+      <div className="flex-1 flex flex-col relative w-full bg-white md:bg-gray-50/50">
+        {/* Desktop Header for collapsed middle sidebar */}
+        {middleSidebarCollapsed && (
+          <div className="absolute top-4 left-4 z-10 hidden md:block">
+            <button
+              onClick={() => setMiddleSidebarCollapsed(false)}
+              className="p-2 bg-white shadow-md rounded-lg text-gray-600 hover:text-primary transition-colors border border-gray-100"
+            >
+              <ChevronRight className="w-5 h-5" />
+            </button>
+          </div>
+        )}
 
-        {/* Messages Area */}
-        <div
+        {/* Messages */}
+        <div 
           ref={messagesContainerRef}
           onScroll={handleMessagesScroll}
-          className="flex-1 overflow-y-auto p-6 space-y-4"
+          className="flex-1 overflow-y-auto scroll-smooth pt-20 md:pt-4 pb-32 px-4 md:px-8 lg:px-12"
         >
           {!currentAssistant ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center text-gray-500">
-                <Brain className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-                <p>请从左侧选择一个助手开始对话</p>
+            <div className="h-full flex flex-col items-center justify-center text-gray-400 animate-fade-in">
+              <div className="w-20 h-20 bg-gray-100 rounded-2xl flex items-center justify-center mb-6">
+                <Brain className="w-10 h-10 text-gray-300" />
               </div>
-            </div>
-          ) : loading && messages.length === 0 ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center text-gray-500">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-                <p>正在加载对话...</p>
-              </div>
+              <h2 className="text-xl font-semibold text-gray-600 mb-2">欢迎使用星耀AI</h2>
+              <p>请从左侧选择一个助手开始创作</p>
             </div>
           ) : messages.length === 0 ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center text-gray-500">
-                <MessageSquare className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-                <p>你好，有什么可以帮助你的？</p>
-                <p className="text-sm mt-2">开始输入消息开始对话</p>
+            <div className="h-full flex flex-col items-center justify-center animate-fade-in">
+              <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center mb-4 ring-4 ring-blue-50/50">
+                <Sparkles className="w-8 h-8 text-primary" />
+              </div>
+              <h2 className="text-2xl font-bold text-gray-800 mb-2">
+                我是{currentAssistant.name}
+              </h2>
+              <p className="text-gray-500 mb-8 max-w-md text-center">
+                我可以帮您{currentAssistant.name.includes('脚本') ? '撰写短视频脚本' : '策划内容与方案'}，请告诉我您的需求。
+              </p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl w-full px-4">
+                {['帮我写一个口播脚本', '分析一下这个账号', '最近什么话题比较火', '优化一下我的简介'].map((text, i) => (
+                  <button
+                    key={i}
+                    onClick={() => { setInputMessage(text); textareaRef.current?.focus() }}
+                    className="p-4 bg-white border border-gray-100 rounded-xl hover:border-primary/30 hover:shadow-lg hover:shadow-primary/5 transition-all text-left text-sm text-gray-600 hover:text-primary"
+                  >
+                    {text}
+                  </button>
+                ))}
               </div>
             </div>
           ) : (
-            <>
-              {showLoadMoreHint && currentCursorRounds != null && (
-                <div className="sticky top-0 z-10 bg-gray-50 py-2 mb-4">
-                  <div className="flex items-center justify-center space-x-2 text-sm text-gray-500">
-                    <div className="flex-1 border-t border-gray-300"></div>
-                    <span>{loadingMore ? '正在加载历史消息...' : '继续滑动加载历史消息'}</span>
-                    <div className="flex-1 border-t border-gray-300"></div>
-                  </div>
-                </div>
-              )}
-              {messages.map((message) => (
-              <div
-                key={message.id}
-                className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
-                <div
-                  className={`max-w-3xl rounded-2xl px-6 py-4 ${
-                    message.role === 'user'
-                      ? 'bg-primary text-white'
-                      : 'bg-white border border-gray-200 text-gray-900'
-                  }`}
-                >
-                  {message.role === 'assistant' ? (
-                    <div className="markdown-body text-gray-900">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={markdownComponents}
-                      >
-                        {message.content || ''}
-                      </ReactMarkdown>
-                    </div>
-                  ) : (
-                  <div className="whitespace-pre-wrap break-words">
-                    {message.content}
-                  </div>
-                  )}
-                </div>
-              </div>
-            ))}
-              {assistantTyping && (
-                <div className="flex justify-start">
-                  <div className="max-w-3xl rounded-2xl px-6 py-4 bg-white border border-gray-200 text-gray-500 flex items-center space-x-3">
-                    <span className="text-sm">助手正在输入</span>
-                    <div className="flex space-x-1">
-                      <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></span>
-                      <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '100ms' }}></span>
-                      <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '200ms' }}></span>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </>
+            <div className="space-y-6 md:space-y-8 max-w-4xl mx-auto">
+               {showLoadMoreHint && (
+                 <div className="flex justify-center py-4">
+                   <div className="bg-gray-100 text-gray-500 text-xs px-3 py-1 rounded-full flex items-center">
+                     {loadingMore && <div className="w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin mr-2" />}
+                     {loadingMore ? '加载中...' : '查看更多历史消息'}
+                   </div>
+                 </div>
+               )}
+               
+               {messages.map((msg, index) => (
+                 <div 
+                   key={msg.id} 
+                   className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} group animate-fade-in`}
+                 >
+                   <div className={`
+                     relative max-w-[90%] md:max-w-[80%] rounded-2xl px-5 py-3.5 shadow-sm text-base leading-relaxed
+                     ${msg.role === 'user' 
+                       ? 'bg-primary text-white rounded-br-none' 
+                       : 'bg-white text-gray-800 border border-gray-100 rounded-bl-none'}
+                   `}>
+                     {msg.role === 'assistant' ? (
+                       <div className="markdown-body">
+                         <ReactMarkdown 
+                            remarkPlugins={[remarkGfm]}
+                            components={markdownComponents}
+                         >
+                           {msg.content}
+                         </ReactMarkdown>
+                         {/* Actions Toolbar */}
+                         <div className="flex items-center space-x-2 mt-2 pt-2 border-t border-gray-50 opacity-0 group-hover:opacity-100 transition-opacity">
+                            {/* Actions can be added here like Copy, Retry */}
+                         </div>
+                       </div>
+                     ) : (
+                       <div className="whitespace-pre-wrap">{msg.content}</div>
+                     )}
+                   </div>
+                 </div>
+               ))}
+               
+               {assistantTyping && (
+                 <div className="flex justify-start animate-fade-in">
+                   <div className="bg-white border border-gray-100 rounded-2xl rounded-bl-none px-5 py-4 shadow-sm flex items-center space-x-2">
+                     <span className="w-2 h-2 bg-primary/60 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                     <span className="w-2 h-2 bg-primary/60 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                     <span className="w-2 h-2 bg-primary/60 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                   </div>
+                 </div>
+               )}
+               <div className="h-4" /> {/* Spacer */}
+            </div>
           )}
         </div>
 
-        {/* Input Area */}
+        {/* Floating Input Area */}
         {currentAssistant && (
-          <div className="bg-white border-t border-gray-200 p-4">
-            <div className="max-w-4xl mx-auto flex items-end space-x-4"> {/* Changed from items-center to items-end */}
-              <textarea
-                ref={textareaRef}
-                rows={1}
-                value={inputMessage}
-                onChange={(e) => setInputMessage(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault()
-                    sendMessage()
-                  }
-                }}
-                placeholder="输入您的问题..."
-                className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent outline-none resize-none overflow-hidden min-h-[46px]"
-                disabled={loading && !abortControllerRef.current}
-              />
-              
-              {loading && abortControllerRef.current ? (
-                 <button
-                  onClick={stopGeneration}
-                  className="p-3 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors flex-shrink-0 h-[46px] flex items-center justify-center"
-                  title="停止生成"
-                >
-                  <Square className="w-5 h-5 fill-current" />
-                </button>
-              ) : (
-                <button
-                  onClick={sendMessage}
-                  disabled={loading || !inputMessage.trim()}
-                  className="p-3 bg-primary text-white rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 h-[46px] flex items-center justify-center"
-                >
-                  <Send className="w-5 h-5" />
-                </button>
-              )}
-            </div>
-            {/* 高级选项折叠区 */}
-            <div className="max-w-4xl mx-auto mt-3">
-              <details>
-                <summary className="cursor-pointer text-sm text-gray-600">高级选项</summary>
-                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {Object.keys(advancedInputs).map((key) => (
-                    <div key={key} className="flex items-center space-x-2">
-                      <label className="text-sm text-gray-700 w-28">{INPUT_LABELS[key] || key}</label>
-                      <input
-                        className="flex-1 px-3 py-2 border border-gray-300 rounded"
-                        value={String(advancedInputs[key] ?? '')}
-                        onChange={(e) => setAdvancedInputs({ ...advancedInputs, [key]: e.target.value })}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </details>
+          <div className="absolute bottom-0 left-0 right-0 p-4 md:p-6 bg-gradient-to-t from-gray-50 via-gray-50 to-transparent z-20 pb-safe">
+            <div className="max-w-3xl mx-auto">
+               <div className="relative bg-white rounded-2xl shadow-float border border-gray-200 focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary transition-all duration-300">
+                 
+                 {/* Advanced Toggle */}
+                 {Object.keys(advancedInputs).length > 0 && (
+                   <div className="px-4 pt-2">
+                     <button 
+                       onClick={() => setShowAdvancedInputs(!showAdvancedInputs)}
+                       className="text-xs text-gray-500 hover:text-primary flex items-center space-x-1"
+                     >
+                       <Settings2 className="w-3 h-3" />
+                       <span>{showAdvancedInputs ? '隐藏高级选项' : '高级选项'}</span>
+                     </button>
+                     
+                     {showAdvancedInputs && (
+                       <div className="grid grid-cols-2 gap-3 mt-2 mb-2 p-2 bg-gray-50 rounded-lg animate-fade-in">
+                         {Object.keys(advancedInputs).map((key) => (
+                           <div key={key}>
+                             <label className="text-xs text-gray-500 block mb-1">{INPUT_LABELS[key] || key}</label>
+                             <input
+                               className="w-full text-xs px-2 py-1.5 border border-gray-200 rounded bg-white focus:outline-none focus:border-primary"
+                               value={String(advancedInputs[key] ?? '')}
+                               onChange={(e) => setAdvancedInputs({ ...advancedInputs, [key]: e.target.value })}
+                             />
+                           </div>
+                         ))}
+                       </div>
+                     )}
+                   </div>
+                 )}
+
+                 <div className="flex items-end p-2">
+                   <textarea
+                     ref={textareaRef}
+                     rows={1}
+                     value={inputMessage}
+                     onChange={(e) => setInputMessage(e.target.value)}
+                     onKeyDown={(e) => {
+                       if (e.key === 'Enter' && !e.shiftKey) {
+                         e.preventDefault()
+                         sendMessage()
+                       }
+                     }}
+                     placeholder="输入您的问题..."
+                     className="flex-1 max-h-[150px] py-3 px-3 text-base bg-transparent border-0 focus:ring-0 resize-none outline-none placeholder:text-gray-400"
+                   />
+                   
+                   <div className="flex items-center pb-1.5 pr-1.5 space-x-2">
+                     {loading && abortControllerRef.current ? (
+                       <button
+                         onClick={stopGeneration}
+                         className="p-2 bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-colors"
+                         title="停止生成"
+                       >
+                         <Square className="w-5 h-5 fill-current" />
+                       </button>
+                     ) : (
+                       <button
+                         onClick={sendMessage}
+                         disabled={!inputMessage.trim()}
+                         className={`
+                           p-2 rounded-xl transition-all duration-200
+                           ${inputMessage.trim() 
+                             ? 'bg-primary text-white shadow-lg shadow-blue-500/30 hover:bg-blue-600 hover:scale-105' 
+                             : 'bg-gray-100 text-gray-400 cursor-not-allowed'}
+                         `}
+                       >
+                         <Send className="w-5 h-5" />
+                       </button>
+                     )}
+                   </div>
+                 </div>
+               </div>
+               <p className="text-center text-xs text-gray-400 mt-2">
+                 AI 内容由大模型生成，请仔细甄别
+               </p>
             </div>
           </div>
         )}
@@ -1351,8 +1200,11 @@ function ChatPageContent() {
 export default function ChatPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+      <div className="h-screen w-screen flex items-center justify-center bg-gray-50">
+        <div className="flex flex-col items-center space-y-4">
+          <div className="w-12 h-12 border-4 border-blue-200 border-t-primary rounded-full animate-spin" />
+          <p className="text-gray-500 font-medium">星耀AI 启动中...</p>
+        </div>
       </div>
     }>
       <ChatPageContent />

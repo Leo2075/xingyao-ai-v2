@@ -13,7 +13,9 @@ import {
   BarChart3, 
   Users, 
   DollarSign,
-  LogOut
+  LogOut,
+  Sparkles,
+  ArrowRight
 } from 'lucide-react'
 
 const iconMap: { [key: string]: any } = {
@@ -35,15 +37,12 @@ export default function AssistantsPage() {
   const router = useRouter()
 
   useEffect(() => {
-    // 检查登录状态
     const userData = localStorage.getItem('user')
     if (!userData) {
       router.push('/')
       return
     }
     setUser(JSON.parse(userData))
-
-    // 获取助手列表
     fetchAssistants()
   }, [router])
 
@@ -51,7 +50,6 @@ export default function AssistantsPage() {
     try {
       const response = await fetch('/api/assistants')
       const data = await response.json()
-      
       if (response.ok) {
         setAssistants(data.assistants)
       }
@@ -79,67 +77,87 @@ export default function AssistantsPage() {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-gray-600">加载中...</p>
+        <div className="flex flex-col items-center">
+          <div className="w-16 h-16 border-4 border-blue-200 border-t-primary rounded-full animate-spin mb-4" />
+          <p className="text-gray-500 font-medium">加载中...</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 font-sans text-gray-900">
       {/* Header */}
-      <header className="bg-gray-900 text-white shadow-lg">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+      <header className="bg-white/80 backdrop-blur-lg border-b border-gray-200 sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-primary rounded-lg flex items-center justify-center">
-              <Brain className="w-6 h-6" />
+            <div className="w-9 h-9 bg-primary/10 rounded-xl flex items-center justify-center">
+              <Sparkles className="w-5 h-5 text-primary fill-current" />
             </div>
-            <span className="text-xl font-bold">星耀AI</span>
+            <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-blue-700">
+              星耀AI
+            </span>
           </div>
-          <button
-            onClick={handleLogout}
-            className="flex items-center space-x-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
-          >
-            <LogOut className="w-4 h-4" />
-            <span>退出</span>
-          </button>
+          
+          <div className="flex items-center space-x-4">
+             {user && (
+               <span className="text-sm text-gray-500 hidden md:block">
+                 欢迎回来，{user.name || '用户'}
+               </span>
+             )}
+            <button
+              onClick={handleLogout}
+              className="flex items-center space-x-2 px-3 py-1.5 text-sm text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>退出</span>
+            </button>
+          </div>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-6 py-12">
-        {/* 按你的要求，此页不展示标题与说明文案 */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        <div className="text-center mb-12 animate-fade-in">
+          <h1 className="text-3xl md:text-4xl font-bold text-gray-900 mb-4 tracking-tight">
+            选择您的 AI 创作伙伴
+          </h1>
+          <p className="text-lg text-gray-500 max-w-2xl mx-auto">
+            从下方的专业助手库中选择一个，开始您的内容创作之旅。无论是短视频脚本还是账号定位，我们都能帮到您。
+          </p>
+        </div>
 
         {/* Assistants Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-fade-in" style={{ animationDelay: '0.1s' }}>
           {assistants.map((assistant) => {
             const Icon = getIcon(assistant.icon_name)
             
             return (
               <div
                 key={assistant.id}
-                className="bg-white rounded-xl shadow-md hover:shadow-xl transition-all duration-300 p-6 cursor-pointer border-2 border-transparent hover:border-primary group"
                 onClick={() => handleSelectAssistant(assistant)}
+                className="group relative bg-white rounded-2xl p-6 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 cursor-pointer border border-gray-100 overflow-hidden"
               >
-                <div className="flex flex-col items-center text-center space-y-4">
-                  <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center group-hover:bg-primary group-hover:scale-110 transition-all duration-300">
-                    <Icon className="w-8 h-8 text-primary group-hover:text-white" />
+                {/* Decorative background gradient */}
+                <div className="absolute top-0 right-0 w-32 h-32 bg-blue-50 rounded-bl-full -mr-16 -mt-16 transition-transform group-hover:scale-110 opacity-50" />
+                
+                <div className="relative z-10">
+                  <div className="w-14 h-14 bg-white rounded-xl shadow-sm border border-gray-100 flex items-center justify-center mb-5 group-hover:border-primary/20 group-hover:bg-primary/5 transition-colors">
+                    <Icon className="w-7 h-7 text-gray-700 group-hover:text-primary transition-colors" />
                   </div>
                   
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                      {assistant.name}
-                    </h3>
-                    <p className="text-sm text-gray-600 line-clamp-2">
-                      {assistant.description}
-                    </p>
-                  </div>
+                  <h3 className="text-xl font-bold text-gray-900 mb-2 group-hover:text-primary transition-colors">
+                    {assistant.name}
+                  </h3>
+                  
+                  <p className="text-sm text-gray-500 line-clamp-2 mb-6 h-10">
+                    {assistant.description || '专业的 AI 内容创作助手，帮助您提升效率。'}
+                  </p>
 
-                  <button className="w-full py-2 bg-primary text-white rounded-lg font-medium opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                    选择助手
-                  </button>
+                  <div className="flex items-center text-primary text-sm font-medium opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-300">
+                    <span>开始对话</span>
+                    <ArrowRight className="w-4 h-4 ml-1" />
+                  </div>
                 </div>
               </div>
             )
@@ -147,8 +165,12 @@ export default function AssistantsPage() {
         </div>
 
         {assistants.length === 0 && (
-          <div className="text-center py-12">
-            <p className="text-gray-500">暂无可用助手</p>
+          <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-gray-200">
+            <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Brain className="w-8 h-8 text-gray-300" />
+            </div>
+            <p className="text-gray-500 font-medium">暂无可用助手</p>
+            <p className="text-sm text-gray-400 mt-2">请联系管理员添加助手配置</p>
           </div>
         )}
       </main>
