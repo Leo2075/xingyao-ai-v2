@@ -1014,21 +1014,21 @@ function ChatPageContent() {
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col relative w-full bg-white md:bg-gray-50/50">
         <div className="bg-white/80 backdrop-blur-sm border-b border-gray-200 p-4 flex items-center justify-between sticky top-0 z-10">
-            <div>
+            <div className="flex items-center gap-3">
+              {/* Desktop Header for collapsed middle sidebar */}
+              {middleSidebarCollapsed && (
+                <div className="hidden md:block animate-fade-in">
+                  <button
+                    onClick={() => setMiddleSidebarCollapsed(false)}
+                    className="p-2 bg-white shadow-sm rounded-lg text-gray-600 hover:text-primary transition-colors border border-gray-200 hover:border-blue-200"
+                  >
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
+                </div>
+              )}
               <h1 className="text-lg font-semibold text-gray-900 flex items-center">
               {currentAssistant ? currentAssistant.name : '请选择助手'}
               </h1>
-            {/* Desktop Header for collapsed middle sidebar */}
-            {middleSidebarCollapsed && (
-              <div className="absolute top-4 left-4 z-10 hidden md:block">
-                <button
-                  onClick={() => setMiddleSidebarCollapsed(false)}
-                  className="p-2 bg-white shadow-md rounded-lg text-gray-600 hover:text-primary transition-colors border border-gray-100"
-                >
-                  <ChevronRight className="w-5 h-5" />
-                </button>
-              </div>
-            )}
             </div>
           <button
             onClick={() => router.push('/assistants')}
