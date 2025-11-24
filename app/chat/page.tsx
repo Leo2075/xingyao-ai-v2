@@ -962,45 +962,48 @@ function ChatPageContent() {
                    onClick={() => loadConversation(conv.id)}
                  >
                    <div className="flex justify-between items-start">
-                     <h3 className={`text-sm font-medium line-clamp-1 pr-6 ${currentConversationId === conv.id ? 'text-primary' : 'text-gray-700'}`}>
+                    <h3 className={`text-sm font-medium line-clamp-1 pr-6 ${currentConversationId === conv.id ? 'text-primary' : 'text-gray-700'}`}>
                        {conv.name || '新的对话'}
                      </h3>
-                     {/* Menu Button */}
-                     <button
-                       className={`
-                         absolute right-2 top-3 p-1 rounded-md hover:bg-gray-200 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity
-                         ${actionMenuId === conv.id ? 'opacity-100 bg-gray-200' : ''}
-                       `}
-                       onClick={(e) => {
-                         e.stopPropagation()
-                         setActionMenuId(prev => prev === conv.id ? '' : conv.id)
-                       }}
-                       ref={(el) => { if(el) menuRefs.current.set(conv.id, el) }}
-                     >
-                       <MoreHorizontal className="w-4 h-4" />
-                     </button>
+                    {/* Menu Button */}
+                    <div
+                      className="absolute right-2 top-3"
+                      ref={(el) => { if (el) menuRefs.current.set(conv.id, el) }}
+                    >
+                      <button
+                        className={`
+                          p-1 rounded-md hover:bg-gray-200 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity
+                          ${actionMenuId === conv.id ? 'opacity-100 bg-gray-200' : ''}
+                        `}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setActionMenuId(prev => prev === conv.id ? '' : conv.id)
+                        }}
+                      >
+                        <MoreHorizontal className="w-4 h-4" />
+                      </button>
+                      {/* Context Menu */}
+                      {actionMenuId === conv.id && (
+                        <div className="mt-1 w-32 bg-white rounded-lg shadow-xl border border-gray-100 z-10 py-1 animate-fade-in">
+                          <button
+                            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
+                            onClick={(e) => { e.stopPropagation(); renameConversation(conv.id, prompt('重命名', conv.name) || conv.name) }}
+                          >
+                            重命名
+                          </button>
+                          <button
+                            className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                            onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id) }}
+                          >
+                            删除
+                          </button>
+                        </div>
+                      )}
+                    </div>
                    </div>
                    <span className="text-xs text-gray-400 mt-1 block">
                      {new Date(conv.updated_at * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                    </span>
-                   
-                   {/* Context Menu */}
-                   {actionMenuId === conv.id && (
-                     <div className="absolute right-0 top-8 w-32 bg-white rounded-lg shadow-xl border border-gray-100 z-10 py-1 animate-fade-in">
-                       <button
-                         className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
-                         onClick={(e) => { e.stopPropagation(); renameConversation(conv.id, prompt('重命名', conv.name) || conv.name) }}
-                       >
-                         重命名
-                       </button>
-                       <button
-                         className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-                         onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id) }}
-                       >
-                         删除
-                       </button>
-                     </div>
-                   )}
                  </div>
                ))
             ) : (
