@@ -27,7 +27,8 @@ import {
   Square,
   History,
   Settings2,
-  Sparkles
+  Sparkles,
+  LayoutGrid
 } from 'lucide-react'
 
 const iconMap: { [key: string]: any } = {
@@ -40,6 +41,7 @@ const iconMap: { [key: string]: any } = {
   'bar-chart': BarChart3,
   'users': Users,
   'dollar-sign': DollarSign,
+  'sparkles': Sparkles,
 }
 
 const toSeconds = (value: any) => {
@@ -789,7 +791,7 @@ function ChatPageContent() {
     router.push('/')
   }
 
-  const getIcon = (iconName?: string) => iconMap[iconName || 'brain'] || Brain
+  const getIcon = (iconName?: string) => iconMap[iconName || 'sparkles'] || Sparkles
 
   // --- Render Helpers ---
 
@@ -828,30 +830,30 @@ function ChatPageContent() {
       `}>
         <div className="absolute inset-0 bg-black/50 md:hidden" onClick={() => setMobileMenuOpen(false)} />
         <div className={`
-          relative w-72 md:w-auto h-full bg-slate-900 text-white flex flex-col shadow-2xl md:shadow-none
+          relative w-72 md:w-auto h-full bg-slate-50/80 backdrop-blur-xl border-r border-white/20 flex flex-col shadow-2xl md:shadow-none z-10
           md:transition-all md:duration-300
-        `} style={{ width: window.innerWidth >= 768 ? (leftSidebarCollapsed ? 64 : 260) : 280 }}>
+        `} style={{ width: window.innerWidth >= 768 ? (leftSidebarCollapsed ? 72 : 260) : 280 }}>
           
           {/* Sidebar Header */}
-          <div className="p-4 flex items-center justify-between border-b border-slate-800/50 h-16">
+          <div className="p-4 flex items-center justify-between h-16">
              {!leftSidebarCollapsed && (
-               <div className="flex items-center space-x-2 font-bold text-lg tracking-tight">
-                 <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
-                   <Brain className="w-5 h-5 text-white" />
+               <div className="flex items-center space-x-3 font-bold text-lg tracking-tight text-slate-800 animate-fade-in">
+                 <div className="w-9 h-9 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/20">
+                   <Sparkles className="w-5 h-5 text-white fill-white/20" />
                  </div>
                  <span>星耀AI</span>
                </div>
              )}
              <button
                 onClick={() => setLeftSidebarCollapsed(!leftSidebarCollapsed)}
-                className="hidden md:flex p-1.5 hover:bg-slate-800 rounded-md transition-colors text-slate-400 hover:text-white"
+                className={`hidden md:flex p-2 hover:bg-white/50 rounded-xl transition-all text-slate-400 hover:text-slate-600 ${leftSidebarCollapsed ? 'mx-auto' : ''}`}
               >
-                {leftSidebarCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+                {leftSidebarCollapsed ? <ChevronRight className="w-5 h-5" /> : <LayoutGrid className="w-5 h-5" />}
              </button>
           </div>
 
           {/* Assistant List */}
-          <div className="flex-1 overflow-y-auto py-2 custom-scrollbar">
+          <div className="flex-1 overflow-y-auto py-4 px-3 space-y-1 custom-scrollbar">
             {assistants.map((assistant) => {
               const Icon = getIcon(assistant.icon_name)
               const isActive = currentAssistant?.id === assistant.id
@@ -861,21 +863,22 @@ function ChatPageContent() {
                   key={assistant.id}
                   onClick={() => selectAssistant(assistant)}
                   className={`
-                    w-full px-3 py-3 flex items-center space-x-3 transition-all duration-200 group
+                    w-full p-3 flex items-center space-x-3 transition-all duration-300 group rounded-xl relative overflow-hidden
                     ${isActive 
-                      ? 'bg-blue-600/10 border-r-2 border-blue-500 text-white' 
-                      : 'text-slate-400 hover:text-white hover:bg-slate-800/50 border-r-2 border-transparent'}
+                      ? 'bg-white shadow-md shadow-blue-100 text-blue-600' 
+                      : 'text-slate-500 hover:bg-white/60 hover:text-slate-800'}
                   `}
                   title={assistant.name}
                 >
+                  {isActive && <div className="absolute inset-0 bg-gradient-to-r from-blue-50/50 to-transparent opacity-50" />}
                   <div className={`
-                    w-8 h-8 rounded-lg flex items-center justify-center transition-colors
-                    ${isActive ? 'bg-blue-600 text-white' : 'bg-slate-800 group-hover:bg-slate-700 text-slate-400 group-hover:text-white'}
+                    relative w-10 h-10 rounded-lg flex items-center justify-center transition-all duration-300
+                    ${isActive ? 'bg-blue-100 text-blue-600 scale-105' : 'bg-slate-100 group-hover:bg-white text-slate-400 group-hover:text-blue-500'}
                   `}>
                     <Icon className="w-5 h-5" />
                   </div>
                   {!leftSidebarCollapsed && (
-                    <span className="text-sm font-medium truncate flex-1 text-left animate-fade-in">
+                    <span className="relative text-sm font-medium truncate flex-1 text-left animate-fade-in">
                       {assistant.name}
                     </span>
                   )}
@@ -885,15 +888,16 @@ function ChatPageContent() {
           </div>
 
           {/* User Profile / Logout */}
-          <div className="p-4 border-t border-slate-800/50 bg-slate-900/50 backdrop-blur-sm">
+          <div className="p-4 mt-auto">
             <button
               onClick={handleLogout}
               className={`
-                w-full flex items-center space-x-3 p-2 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-red-400 transition-colors
+                w-full flex items-center space-x-3 p-3 rounded-xl transition-all group
+                hover:bg-red-50 hover:text-red-600 text-slate-400
                 ${leftSidebarCollapsed ? 'justify-center' : ''}
               `}
             >
-              <LogOut className="w-5 h-5" />
+              <LogOut className="w-5 h-5 group-hover:scale-110 transition-transform" />
               {!leftSidebarCollapsed && <span className="text-sm font-medium">退出登录</span>}
             </button>
           </div>
@@ -1004,23 +1008,37 @@ function ChatPageContent() {
 
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col relative w-full bg-white md:bg-gray-50/50">
-        {/* Desktop Header for collapsed middle sidebar */}
-        {middleSidebarCollapsed && (
-          <div className="absolute top-4 left-4 z-10 hidden md:block">
-            <button
-              onClick={() => setMiddleSidebarCollapsed(false)}
-              className="p-2 bg-white shadow-md rounded-lg text-gray-600 hover:text-primary transition-colors border border-gray-100"
-            >
-              <ChevronRight className="w-5 h-5" />
-            </button>
-          </div>
-        )}
+        <div className="bg-white/80 backdrop-blur-sm border-b border-gray-200 p-4 flex items-center justify-between sticky top-0 z-10">
+            <div>
+              <h1 className="text-lg font-semibold text-gray-900 flex items-center">
+              {currentAssistant ? currentAssistant.name : '请选择助手'}
+              </h1>
+            {/* Desktop Header for collapsed middle sidebar */}
+            {middleSidebarCollapsed && (
+              <div className="absolute top-4 left-4 z-10 hidden md:block">
+                <button
+                  onClick={() => setMiddleSidebarCollapsed(false)}
+                  className="p-2 bg-white shadow-md rounded-lg text-gray-600 hover:text-primary transition-colors border border-gray-100"
+                >
+                  <ChevronRight className="w-5 h-5" />
+                </button>
+              </div>
+            )}
+            </div>
+          <button
+            onClick={() => router.push('/assistants')}
+            className="flex items-center px-3 py-1.5 text-sm text-gray-600 hover:text-primary hover:bg-blue-50 rounded-lg transition-all border border-gray-200 hover:border-blue-100"
+          >
+            <ChevronLeft className="w-4 h-4 mr-1" />
+            切换助手
+          </button>
+        </div>
 
         {/* Messages */}
         <div 
           ref={messagesContainerRef}
           onScroll={handleMessagesScroll}
-          className="flex-1 overflow-y-auto scroll-smooth pt-20 md:pt-4 pb-32 px-4 md:px-8 lg:px-12"
+          className="flex-1 overflow-y-auto scroll-smooth p-4 md:p-8"
         >
           {!currentAssistant ? (
             <div className="h-full flex flex-col items-center justify-center text-gray-400 animate-fade-in">
@@ -1032,30 +1050,18 @@ function ChatPageContent() {
             </div>
           ) : messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center animate-fade-in">
-              <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center mb-4 ring-4 ring-blue-50/50">
-                <Sparkles className="w-8 h-8 text-primary" />
+              <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl flex items-center justify-center mb-6 shadow-xl shadow-blue-500/20">
+                <Sparkles className="w-8 h-8 text-white fill-white/20" />
               </div>
-              <h2 className="text-2xl font-bold text-gray-800 mb-2">
+              <h2 className="text-2xl font-bold text-gray-900 mb-3">
                 我是{currentAssistant.name}
               </h2>
-              <p className="text-gray-500 mb-8 max-w-md text-center">
-                我可以帮您{currentAssistant.name.includes('脚本') ? '撰写短视频脚本' : '策划内容与方案'}，请告诉我您的需求。
+              <p className="text-gray-500 mb-8 max-w-md text-center leading-relaxed">
+                {currentAssistant.description || '我是您的智能助手，随时为您提供专业的建议和内容创作支持。'}
               </p>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl w-full px-4">
-                {['帮我写一个口播脚本', '分析一下这个账号', '最近什么话题比较火', '优化一下我的简介'].map((text, i) => (
-                  <button
-                    key={i}
-                    onClick={() => { setInputMessage(text); textareaRef.current?.focus() }}
-                    className="p-4 bg-white border border-gray-100 rounded-xl hover:border-primary/30 hover:shadow-lg hover:shadow-primary/5 transition-all text-left text-sm text-gray-600 hover:text-primary"
-                  >
-                    {text}
-                  </button>
-                ))}
-              </div>
             </div>
           ) : (
-            <div className="space-y-6 md:space-y-8 max-w-4xl mx-auto">
+            <div className="space-y-6 md:space-y-8 max-w-3xl mx-auto pb-32">
                {showLoadMoreHint && (
                  <div className="flex justify-center py-4">
                    <div className="bg-gray-100 text-gray-500 text-xs px-3 py-1 rounded-full flex items-center">
@@ -1071,10 +1077,10 @@ function ChatPageContent() {
                    className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} group animate-fade-in`}
                  >
                    <div className={`
-                     relative max-w-[90%] md:max-w-[80%] rounded-2xl px-5 py-3.5 shadow-sm text-base leading-relaxed
+                     relative max-w-[90%] md:max-w-[85%] rounded-2xl px-5 py-3.5 shadow-sm text-base leading-relaxed
                      ${msg.role === 'user' 
-                       ? 'bg-primary text-white rounded-br-none' 
-                       : 'bg-white text-gray-800 border border-gray-100 rounded-bl-none'}
+                       ? 'bg-blue-600 text-white rounded-br-sm shadow-blue-500/20' 
+                       : 'bg-white text-gray-800 border border-gray-100 rounded-bl-sm'}
                    `}>
                      {msg.role === 'assistant' ? (
                        <div className="markdown-body">
@@ -1098,42 +1104,41 @@ function ChatPageContent() {
                
                {assistantTyping && (
                  <div className="flex justify-start animate-fade-in">
-                   <div className="bg-white border border-gray-100 rounded-2xl rounded-bl-none px-5 py-4 shadow-sm flex items-center space-x-2">
-                     <span className="w-2 h-2 bg-primary/60 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                     <span className="w-2 h-2 bg-primary/60 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                     <span className="w-2 h-2 bg-primary/60 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                   <div className="bg-white border border-gray-100 rounded-2xl rounded-bl-sm px-5 py-4 shadow-sm flex items-center space-x-2">
+                     <span className="w-2 h-2 bg-blue-600/60 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                     <span className="w-2 h-2 bg-blue-600/60 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                     <span className="w-2 h-2 bg-blue-600/60 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                    </div>
                  </div>
                )}
-               <div className="h-4" /> {/* Spacer */}
             </div>
           )}
         </div>
 
         {/* Floating Input Area */}
         {currentAssistant && (
-          <div className="absolute bottom-0 left-0 right-0 p-4 md:p-6 bg-gradient-to-t from-gray-50 via-gray-50 to-transparent z-20 pb-safe">
+          <div className="absolute bottom-0 left-0 right-0 p-4 md:p-6 bg-gradient-to-t from-gray-50 via-gray-50/95 to-transparent z-20 pb-safe">
             <div className="max-w-3xl mx-auto">
-               <div className="relative bg-white rounded-2xl shadow-float border border-gray-200 focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary transition-all duration-300">
+               <div className="relative bg-white rounded-2xl shadow-xl shadow-black/5 border border-gray-200/80 focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-500 transition-all duration-300">
                  
                  {/* Advanced Toggle */}
                  {Object.keys(advancedInputs).length > 0 && (
                    <div className="px-4 pt-2">
                      <button 
                        onClick={() => setShowAdvancedInputs(!showAdvancedInputs)}
-                       className="text-xs text-gray-500 hover:text-primary flex items-center space-x-1"
+                       className="text-xs text-gray-500 hover:text-blue-600 flex items-center space-x-1 transition-colors"
                      >
                        <Settings2 className="w-3 h-3" />
                        <span>{showAdvancedInputs ? '隐藏高级选项' : '高级选项'}</span>
                      </button>
                      
                      {showAdvancedInputs && (
-                       <div className="grid grid-cols-2 gap-3 mt-2 mb-2 p-2 bg-gray-50 rounded-lg animate-fade-in">
+                       <div className="grid grid-cols-2 gap-3 mt-2 mb-2 p-3 bg-gray-50 rounded-xl animate-fade-in border border-gray-100">
                          {Object.keys(advancedInputs).map((key) => (
                            <div key={key}>
-                             <label className="text-xs text-gray-500 block mb-1">{INPUT_LABELS[key] || key}</label>
+                             <label className="text-xs text-gray-500 block mb-1.5 ml-1">{INPUT_LABELS[key] || key}</label>
                              <input
-                               className="w-full text-xs px-2 py-1.5 border border-gray-200 rounded bg-white focus:outline-none focus:border-primary"
+                               className="w-full text-xs px-3 py-2 border border-gray-200 rounded-lg bg-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
                                value={String(advancedInputs[key] ?? '')}
                                onChange={(e) => setAdvancedInputs({ ...advancedInputs, [key]: e.target.value })}
                              />
@@ -1157,14 +1162,14 @@ function ChatPageContent() {
                        }
                      }}
                      placeholder="输入您的问题..."
-                     className="flex-1 max-h-[150px] py-3 px-3 text-base bg-transparent border-0 focus:ring-0 resize-none outline-none placeholder:text-gray-400"
+                     className="flex-1 max-h-[150px] py-3 px-4 text-base bg-transparent border-0 focus:ring-0 resize-none outline-none placeholder:text-gray-400"
                    />
                    
                    <div className="flex items-center pb-1.5 pr-1.5 space-x-2">
                      {loading && abortControllerRef.current ? (
                        <button
                          onClick={stopGeneration}
-                         className="p-2 bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-colors"
+                         className="p-2.5 bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-all duration-200 active:scale-95"
                          title="停止生成"
                        >
                          <Square className="w-5 h-5 fill-current" />
@@ -1174,9 +1179,9 @@ function ChatPageContent() {
                          onClick={sendMessage}
                          disabled={!inputMessage.trim()}
                          className={`
-                           p-2 rounded-xl transition-all duration-200
+                           p-2.5 rounded-xl transition-all duration-200 active:scale-95
                            ${inputMessage.trim() 
-                             ? 'bg-primary text-white shadow-lg shadow-blue-500/30 hover:bg-blue-600 hover:scale-105' 
+                             ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20 hover:bg-blue-700 hover:shadow-blue-600/30' 
                              : 'bg-gray-100 text-gray-400 cursor-not-allowed'}
                          `}
                        >
@@ -1186,7 +1191,7 @@ function ChatPageContent() {
                    </div>
                  </div>
                </div>
-               <p className="text-center text-xs text-gray-400 mt-2">
+               <p className="text-center text-xs text-gray-400 mt-3">
                  AI 内容由大模型生成，请仔细甄别
                </p>
             </div>
@@ -1202,7 +1207,7 @@ export default function ChatPage() {
     <Suspense fallback={
       <div className="h-screen w-screen flex items-center justify-center bg-gray-50">
         <div className="flex flex-col items-center space-y-4">
-          <div className="w-12 h-12 border-4 border-blue-200 border-t-primary rounded-full animate-spin" />
+          <div className="w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
           <p className="text-gray-500 font-medium">星耀AI 启动中...</p>
         </div>
       </div>
