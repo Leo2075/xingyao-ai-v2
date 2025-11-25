@@ -46,39 +46,33 @@ export const PerformanceConfig = {
 } as const
 
 /**
- * 性能监控辅助函数
+ * 性能监控辅助函数（异步版本）
  */
-export function measurePerformance<T>(
+export async function measurePerformance<T>(
   label: string,
-  fn: () => T | Promise<T>
-): T | Promise<T> {
+  fn: () => Promise<T>
+): Promise<T> {
   if (!PerformanceConfig.monitoring.enabled) {
     return fn()
   }
 
   const start = performance.now()
-  const result = fn()
-
-  if (result instanceof Promise) {
-    return result.finally(() => {
-      const duration = performance.now() - start
-      if (PerformanceConfig.monitoring.logSlowQueries && 
-          duration > PerformanceConfig.monitoring.slowQueryThreshold) {
-        console.warn(`[性能警告] ${label} 耗时 ${duration.toFixed(2)}ms`)
-      } else {
-        console.log(`[性能] ${label} 耗时 ${duration.toFixed(2)}ms`)
-      }
-    }) as T
+  try {
+    const result = await fn()
+    const duration = performance.now() - start
+    
+    if (PerformanceConfig.monitoring.logSlowQueries && 
+        duration > PerformanceConfig.monitoring.slowQueryThreshold) {
+      console.warn(`[性能警告] ${label} 耗时 ${duration.toFixed(2)}ms`)
+    } else {
+      console.log(`[性能] ${label} 耗时 ${duration.toFixed(2)}ms`)
+    }
+    
+    return result
+  } catch (error) {
+    const duration = performance.now() - start
+    console.error(`[性能错误] ${label} 失败，耗时 ${duration.toFixed(2)}ms`, error)
+    throw error
   }
-
-  const duration = performance.now() - start
-  if (PerformanceConfig.monitoring.logSlowQueries && 
-      duration > PerformanceConfig.monitoring.slowQueryThreshold) {
-    console.warn(`[性能警告] ${label} 耗时 ${duration.toFixed(2)}ms`)
-  } else {
-    console.log(`[性能] ${label} 耗时 ${duration.toFixed(2)}ms`)
-  }
-
-  return result
 }
 

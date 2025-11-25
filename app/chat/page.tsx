@@ -445,7 +445,7 @@ function ChatPageContent() {
     if (!user?.id) return null
     
     // 使用请求去重器，防止重复请求
-    return requestDeduplicatorRef.current.dedupe(
+    return await requestDeduplicatorRef.current.dedupe(
       `conversations_${assistant.id}_${user.id}`,
       () => measurePerformance(`加载对话列表[${assistant.name}]`, async () => {
         try {
@@ -501,7 +501,7 @@ function ChatPageContent() {
     if (!currentAssistant) return
     
     // 使用请求去重器，防止重复加载相同消息
-    return requestDeduplicatorRef.current.dedupe(
+    return await requestDeduplicatorRef.current.dedupe(
       `messages_${conversationId}_${cursorRounds}_${mode}`,
       () => measurePerformance(`加载消息[${conversationId.slice(0, 8)}][轮次:${cursorRounds}]`, async () => {
         try {
