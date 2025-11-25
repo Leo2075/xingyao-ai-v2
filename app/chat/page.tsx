@@ -26,9 +26,7 @@ import {
   MoreHorizontal,
   Square,
   History,
-  Settings2,
-  Sparkles,
-  LayoutGrid
+  Sparkles
 } from 'lucide-react'
 
 const iconMap: { [key: string]: any } = {
@@ -92,10 +90,6 @@ const sortConversationsWithTemp = (
     .filter((item) => !isTemp(item.id))
     .sort((a, b) => b.updated_at - a.updated_at)
   return [...temps, ...normals]
-}
-
-const INPUT_LABELS: Record<string, string> = {
-  user: '用户信息',
 }
 
 const CONVERSATION_CACHE_TTL = 5 * 60 * 1000 // 5分钟
@@ -166,8 +160,6 @@ function ChatPageContent() {
   
   // Input State
   const [inputMessage, setInputMessage] = useState('')
-  const [advancedInputs, setAdvancedInputs] = useState<Record<string, any>>({})
-  const [showAdvancedInputs, setShowAdvancedInputs] = useState(false)
   
   // Edit State
   const [editingConversationId, setEditingConversationId] = useState<string>('')
@@ -333,26 +325,11 @@ function ChatPageContent() {
     }
   }
 
-  const getPresetInputs = (assistant: Assistant) => {
-    // ... existing logic ...
-    const name = assistant.name || ''
-    if (name === '原创选题文案策划') return { user: '' }
-    if (name.includes('IP') || name.includes('定位')) return { persona: '', audience: '' }
-    if (name.includes('脚本')) return { tone: '专业', duration: '60s' }
-    if (name.includes('选题') || name.includes('雷达')) return { platform: '抖音', industry: '' }
-    if (name.includes('话术')) return { tone: '接地气', cta: '私信' }
-    if (name.includes('剪辑')) return { bgm_style: '轻快', format: '分镜' }
-    if (name.includes('发布') || name.includes('策略')) return { best_slot: '晚间', hashtags_count: 5 }
-    return {}
-  }
-
   const selectAssistant = async (assistant: Assistant) => {
     activeStreamRef.current = null
     setCurrentAssistant(assistant)
     setMessages([])
     setCurrentConversationId('')
-    const preset = getPresetInputs(assistant)
-    setAdvancedInputs(preset)
     setMobileMenuOpen(false) // Close mobile menu
 
     // 乐观更新：优先显示缓存（即使过期），后台静默刷新
@@ -656,7 +633,6 @@ function ChatPageContent() {
           message: inputMessage,
           conversationId: conversationIdForRequest || undefined,
           userId: user?.id,
-          inputs: advancedInputs,
         }),
         signal: abortControllerRef.current.signal,
       })
@@ -1168,35 +1144,6 @@ function ChatPageContent() {
           <div className="absolute bottom-0 left-0 right-0 p-4 md:p-6 bg-gradient-to-t from-gray-50 via-gray-50/95 to-transparent z-20 pb-safe">
             <div className="max-w-3xl mx-auto">
                <div className="relative bg-white rounded-2xl shadow-xl shadow-black/5 border border-gray-200/80 focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-500 transition-all duration-300">
-                 
-                 {/* Advanced Toggle */}
-                 {Object.keys(advancedInputs).length > 0 && (
-                   <div className="px-4 pt-2">
-                     <button 
-                       onClick={() => setShowAdvancedInputs(!showAdvancedInputs)}
-                       className="text-xs text-gray-500 hover:text-blue-600 flex items-center space-x-1 transition-colors"
-                     >
-                       <Settings2 className="w-3 h-3" />
-                       <span>{showAdvancedInputs ? '隐藏高级选项' : '高级选项'}</span>
-                     </button>
-                     
-                     {showAdvancedInputs && (
-                       <div className="grid grid-cols-2 gap-3 mt-2 mb-2 p-3 bg-gray-50 rounded-xl animate-fade-in border border-gray-100">
-                         {Object.keys(advancedInputs).map((key) => (
-                           <div key={key}>
-                             <label className="text-xs text-gray-500 block mb-1.5 ml-1">{INPUT_LABELS[key] || key}</label>
-                             <input
-                               className="w-full text-xs px-3 py-2 border border-gray-200 rounded-lg bg-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
-                               value={String(advancedInputs[key] ?? '')}
-                               onChange={(e) => setAdvancedInputs({ ...advancedInputs, [key]: e.target.value })}
-                             />
-                           </div>
-                         ))}
-                       </div>
-                     )}
-                   </div>
-                 )}
-
                  <div className="flex items-end p-2">
                    <textarea
                      ref={textareaRef}
