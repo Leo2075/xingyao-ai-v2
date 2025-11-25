@@ -13,7 +13,7 @@ export async function GET() {
   try {
     const { data: assistants, error } = await supabase
       .from('assistants')
-      .select('id, name, description, icon_name, status, api_mode, created_at, updated_at')
+      .select('id, name, description, icon_name, status, created_at, updated_at')
       .eq('status', 'active')
       .order('created_at', { ascending: true })
 
