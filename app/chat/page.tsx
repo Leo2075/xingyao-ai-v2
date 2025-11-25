@@ -173,6 +173,9 @@ function ChatPageContent() {
   const [editingConversationId, setEditingConversationId] = useState<string>('')
   const [editingName, setEditingName] = useState<string>('')
   const [actionMenuId, setActionMenuId] = useState<string>('')
+  
+  // Delete Confirm State
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string>('')
 
   // Refs
   const conversationCacheRef = useRef<Map<string, { data: Conversation[]; updatedAt: number }>>(new Map())
@@ -991,7 +994,7 @@ function ChatPageContent() {
                           </button>
                           <button
                             className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-                            onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id) }}
+                            onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(conv.id); setActionMenuId('') }}
                           >
                             删除
                           </button>
@@ -1126,6 +1129,39 @@ function ChatPageContent() {
             </div>
           )}
         </div>
+
+        {/* Delete Confirm Modal */}
+        {deleteConfirmId && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center">
+            {/* Backdrop */}
+            <div 
+              className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+              onClick={() => setDeleteConfirmId('')}
+            />
+            {/* Modal */}
+            <div className="relative bg-white rounded-2xl shadow-2xl p-6 mx-4 max-w-sm w-full animate-fade-in">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">确认删除</h3>
+              <p className="text-gray-600 mb-6">是否确认删除当前对话？删除后不可找回记录。</p>
+              <div className="flex space-x-3">
+                <button
+                  onClick={() => setDeleteConfirmId('')}
+                  className="flex-1 px-4 py-2.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-xl font-medium transition-colors"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={() => {
+                    deleteConversation(deleteConfirmId)
+                    setDeleteConfirmId('')
+                  }}
+                  className="flex-1 px-4 py-2.5 text-white bg-red-500 hover:bg-red-600 rounded-xl font-medium transition-colors"
+                >
+                  确定删除
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Floating Input Area */}
         {currentAssistant && (
