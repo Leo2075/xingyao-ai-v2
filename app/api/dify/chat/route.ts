@@ -198,23 +198,41 @@ async function persistMessages({
     // 用户消息时间稍早，确保消息顺序正确
     const userMessageTime = new Date(userMessageTimestamp.getTime() - 100)
 
-    // 1. 创建或更新会话记录
-    const { error: convError } = await supabase
+    // 1. 先检查对话是否已存在
+    const { data: existingConv } = await supabase
       .from('chat_conversations')
-      .upsert(
-        {
+      .select('id, title')
+      .eq('id', conversationId)
+      .maybeSingle()
+
+    if (existingConv) {
+      // 对话已存在，只更新 updated_at，不覆盖标题（保护用户重命名）
+      const { error: updateError } = await supabase
+        .from('chat_conversations')
+        .update({ updated_at: now.toISOString() })
+        .eq('id', conversationId)
+
+      if (updateError) {
+        console.error('[Chat] 更新会话时间失败:', updateError)
+        throw updateError
+      }
+    } else {
+      // 新对话，插入完整记录（包含自动生成的标题）
+      const { error: insertError } = await supabase
+        .from('chat_conversations')
+        .insert({
           id: conversationId,
           user_id: userIdentifier,
           assistant_id: assistantId,
           title: conversationName || null,
+          created_at: now.toISOString(),
           updated_at: now.toISOString(),
-        },
-        { onConflict: 'id' }
-      )
+        })
 
-    if (convError) {
-      console.error('[Chat] 保存会话失败:', convError)
-      throw convError
+      if (insertError) {
+        console.error('[Chat] 创建会话失败:', insertError)
+        throw insertError
+      }
     }
 
     // 2. 检查消息是否已存在（防止重复插入）
