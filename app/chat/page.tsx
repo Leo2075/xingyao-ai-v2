@@ -179,7 +179,7 @@ function ChatPageContent() {
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const loadingMoreRef = useRef(false)
-  const scrollIntentRef = useRef<ScrollBehavior | null>(null)
+  const scrollIntentRef = useRef<'instant' | 'smooth' | null>(null)
   const currentConversationIdRef = useRef<string>('')
   const activeStreamRef = useRef<{ id: string; assistantId: string } | null>(null)
   const menuRefs = useRef<Map<string, HTMLElement>>(new Map())
@@ -192,20 +192,22 @@ function ChatPageContent() {
   const isTemporaryConversation = (id?: string) => Boolean(id && id.startsWith('temp-'))
 
   // Scroll Helpers
-  const requestScrollToBottom = (behavior: ScrollBehavior = 'auto') => {
-    scrollIntentRef.current = behavior
+  // instant: 瞬时滚动（加载历史消息时使用），smooth: 平滑滚动（新消息时使用）
+  const requestScrollToBottom = (mode: 'instant' | 'smooth' = 'instant') => {
+    scrollIntentRef.current = mode
   }
 
-  const scrollToBottom = (behavior: ScrollBehavior = 'auto') => {
-    requestAnimationFrame(() => {
-      const container = messagesContainerRef.current
-      if (!container) return
-      if (behavior === 'auto') {
-        container.scrollTop = container.scrollHeight
-      } else {
-        container.scrollTo({ top: container.scrollHeight, behavior })
-      }
-    })
+  // 滚动到底部，instant 为 true 时瞬时滚动（用于加载历史消息）
+  const scrollToBottom = (instant = true) => {
+    const container = messagesContainerRef.current
+    if (!container) return
+    if (instant) {
+      // 瞬时滚动，不产生动画
+      container.scrollTop = container.scrollHeight
+    } else {
+      // 平滑滚动，用于新消息
+      container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
+    }
   }
 
   const adjustTextareaHeight = () => {
@@ -254,11 +256,9 @@ function ChatPageContent() {
   // 使用 useLayoutEffect 确保在 DOM 更新后立即滚动，避免闪烁
   useLayoutEffect(() => {
     if (!scrollIntentRef.current) return
-    const container = messagesContainerRef.current
-    if (container) {
-      container.scrollTop = container.scrollHeight
-    }
+    const mode = scrollIntentRef.current
     scrollIntentRef.current = null
+    scrollToBottom(mode === 'instant')
   }, [messages])
 
   useEffect(() => {
@@ -446,7 +446,7 @@ function ChatPageContent() {
             }
           } else {
             setMessages(normalized)
-            requestScrollToBottom('auto')
+            requestScrollToBottom('instant')
           }
           setCurrentCursorRounds(data.nextCursorRounds ?? null)
         }
@@ -520,7 +520,7 @@ function ChatPageContent() {
     setCurrentConversationId(tempConversation.id)
     setMessages([])
     setCurrentCursorRounds(null)
-    requestScrollToBottom('auto')
+    requestScrollToBottom('instant')
     setMobileHistoryOpen(false)
   }
 
@@ -562,7 +562,7 @@ function ChatPageContent() {
       setCurrentConversationId('')
       setMessages([])
       setCurrentCursorRounds(null)
-      requestScrollToBottom('auto')
+      requestScrollToBottom('instant')
     }
 
     try {
@@ -637,7 +637,7 @@ function ChatPageContent() {
     }
 
     setMessages(prev => sortMessages([...prev, userMessage]))
-    requestScrollToBottom('auto')
+    requestScrollToBottom('instant')
     setInputMessage('')
     setLoading(true)
     setAssistantTyping(true)
@@ -1044,7 +1044,7 @@ function ChatPageContent() {
         <div 
           ref={messagesContainerRef}
           onScroll={handleMessagesScroll}
-          className="flex-1 overflow-y-auto scroll-smooth p-4 md:p-8"
+          className="flex-1 overflow-y-auto p-4 md:p-8"
         >
           {!currentAssistant ? (
             <div className="h-full flex flex-col items-center justify-center text-gray-400 animate-fade-in">
@@ -1053,6 +1053,12 @@ function ChatPageContent() {
               </div>
               <h2 className="text-xl font-semibold text-gray-600 mb-2">欢迎使用星耀AI</h2>
               <p>请从左侧选择一个AI助手开始创作</p>
+            </div>
+          ) : loading && messages.length === 0 ? (
+            // 加载历史消息时的加载动画
+            <div className="h-full flex flex-col items-center justify-center animate-fade-in">
+              <div className="w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-4" />
+              <p className="text-gray-500 font-medium">加载对话历史...</p>
             </div>
           ) : messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center animate-fade-in">
