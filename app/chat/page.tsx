@@ -370,10 +370,18 @@ function ChatPageContent() {
     setLoading(false)
     setMobileMenuOpen(false)
 
-    // 辅助函数：加载第一个真实对话
-    const loadFirstRealConversation = (convList: Conversation[]) => {
-      const firstReal = convList.find(c => !isTemporaryConversation(c.id))
-      if (firstReal) {
+    // 辅助函数：确保存在已加载的真实对话
+    const ensureActiveConversation = (convList: Conversation[]) => {
+      const firstReal = convList.find((c) => !isTemporaryConversation(c.id))
+      if (!firstReal) return false
+
+      const currentId = currentConversationIdRef.current
+      const needsSwitch =
+        !currentId ||
+        isTemporaryConversation(currentId) ||
+        !convList.some((conv) => conv.id === currentId)
+
+      if (needsSwitch) {
         loadConversation(firstReal.id, true)
         return true
       }
@@ -390,13 +398,12 @@ function ChatPageContent() {
       setConversationsLoading(false)
       
       // 先尝试从缓存加载
-      const loadedFromCache = loadFirstRealConversation(sortedCached)
+      ensureActiveConversation(sortedCached)
       
-      // 后台刷新，刷新完成后如果还没加载对话则自动加载
+      // 后台刷新，刷新完成后根据最新数据兜底
       fetchConversations(assistant, false).then(freshConversations => {
-        if (freshConversations && freshConversations.length > 0 && !loadedFromCache) {
-          // 缓存中没有对话但服务器有，加载最新对话
-          loadFirstRealConversation(freshConversations)
+        if (freshConversations && freshConversations.length > 0) {
+          ensureActiveConversation(freshConversations)
         }
       })
     } else {
@@ -404,7 +411,7 @@ function ChatPageContent() {
       setConversationsLoading(true)
       const conversations = await fetchConversations(assistant, true)
       if (conversations && conversations.length > 0) {
-        loadFirstRealConversation(conversations)
+        ensureActiveConversation(conversations)
       }
     }
   }
