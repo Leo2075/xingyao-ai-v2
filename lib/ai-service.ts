@@ -135,7 +135,18 @@ export class AIService {
       }
     }
 
-    console.log(`[AIService] 使用 ${isClaudeFormat ? 'Claude' : 'OpenAI'} 格式调用中转站`)
+    // 详细日志：发送给大模型的完整信息
+    console.log('========== [AIService] 中转站请求详情 ==========')
+    console.log(`[AIService] API 格式: ${isClaudeFormat ? 'Claude' : 'OpenAI'}`)
+    console.log(`[AIService] 模型: ${body.model}`)
+    console.log(`[AIService] 温度: ${body.temperature}`)
+    console.log(`[AIService] 最大Token: ${body.max_tokens}`)
+    console.log(`[AIService] 历史消息数: ${historyMessages.length} 条`)
+    console.log(`[AIService] 总消息数: ${isClaudeFormat ? body.messages.length : body.messages.length} 条`)
+    console.log(`[AIService] System Prompt: ${isClaudeFormat ? (body.system ? '有' : '无') : (body.messages[0]?.role === 'system' ? '有' : '无')}`)
+    console.log('[AIService] 发送的消息内容:')
+    console.log(JSON.stringify(isClaudeFormat ? body.messages : body.messages, null, 2))
+    console.log('================================================')
 
     const response = await fetch(this.assistant.relay_url!, {
       method: 'POST',
