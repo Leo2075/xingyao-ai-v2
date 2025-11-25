@@ -21,23 +21,10 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 验证助手是否存在
-    const { data: assistant, error } = await supabase
-      .from('assistants')
-      .select('id')
-      .eq('id', assistantId)
-      .maybeSingle()
-
-    if (error || !assistant) {
-      return NextResponse.json(
-        { error: '助手不存在' },
-        { status: 404 }
-      )
-    }
-
     const userIdentifier = userId ? `user-${userId}` : 'user-anon'
 
-    // 从本地数据库查询对话列表
+    // 从本地数据库查询对话列表（移除不必要的助手验证查询）
+    // 依赖外键约束保证数据一致性
     const { data: conversations, error: convError } = await supabase
       .from('chat_conversations')
       .select('id, title, created_at, updated_at')

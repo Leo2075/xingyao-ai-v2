@@ -36,49 +36,18 @@ export async function POST(request: NextRequest) {
     // 计算分页参数
     const desiredRounds = Math.max(Number(rounds) || 1, 1)
     const usedCursor = Math.max(Number(cursorRounds) || 0, 0)
-    const limit = desiredRounds * 2  // 每轮2条消息（user + assistant）
+    const limit = desiredRounds * 2 + 1  // 多取1条用于判断是否有更多消息
     const offset = usedCursor * 2
 
-    // 先获取消息总数，用于计算从后往前的偏移量
-    const { count: totalCount, error: countError } = await supabase
-      .from('chat_messages')
-      .select('*', { count: 'exact', head: true })
-      .eq('conversation_id', conversationId)
-      .eq('user_id', userIdentifier)
-
-    if (countError) {
-      console.error('[Messages] 查询消息总数失败:', countError)
-      return NextResponse.json(
-        { messages: [], nextCursorRounds: null },
-        { status: 200 }
-      )
-    }
-
-    const total = totalCount || 0
-    
-    // 计算从后往前的起始位置
-    // 例如：总共 50 条消息，limit=30，offset=0
-    // 应该获取第 20-49 条（最新的 30 条）
-    const startFromEnd = total - offset - limit
-    const actualStart = Math.max(0, startFromEnd)
-    const actualLimit = startFromEnd < 0 ? limit + startFromEnd : limit
-
-    // 如果没有更多消息可加载
-    if (actualLimit <= 0) {
-      return NextResponse.json({
-        messages: [],
-        nextCursorRounds: null,
-      })
-    }
-
-    // 从数据库查询消息（按时间升序，从计算好的位置开始）
-    const { data: messages, error: msgError } = await supabase
+    // 优化：使用反向查询 + limit，避免 count 查询
+    // 先按降序获取，然后在应用层反转
+    const { data: rawMessages, error: msgError } = await supabase
       .from('chat_messages')
       .select('id, role, content, created_at')
       .eq('conversation_id', conversationId)
       .eq('user_id', userIdentifier)
-      .order('created_at', { ascending: true })
-      .range(actualStart, actualStart + actualLimit - 1)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1)
 
     if (msgError) {
       console.error('[Messages] 查询消息失败:', msgError)
@@ -88,12 +57,18 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 判断是否还有更早的消息
-    const hasMore = actualStart > 0
+    // 检查是否有更多消息（如果返回了 limit 条，说明可能还有更多）
+    const hasMore = (rawMessages?.length || 0) > desiredRounds * 2
+    
+    // 只返回请求的消息数量（去掉多取的那一条）
+    const messages = hasMore 
+      ? (rawMessages?.slice(0, -1) || []).reverse() 
+      : (rawMessages || []).reverse()
+    
     const nextCursorRounds = hasMore ? usedCursor + desiredRounds : null
 
     return NextResponse.json({
-      messages: messages || [],
+      messages,
       nextCursorRounds,
     })
   } catch (error) {

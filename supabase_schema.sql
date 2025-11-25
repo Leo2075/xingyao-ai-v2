@@ -14,6 +14,9 @@ create table if not exists chat_conversations (
 -- 创建索引以加速查询
 create index if not exists idx_conversations_user_id on chat_conversations(user_id);
 create index if not exists idx_conversations_updated_at on chat_conversations(updated_at desc);
+-- 组合索引：针对常见查询 (assistant_id, user_id, updated_at)
+create index if not exists idx_conversations_assistant_user_updated 
+  on chat_conversations(assistant_id, user_id, updated_at desc);
 
 -- 2. 消息记录表 (Storing Messages)
 create table if not exists chat_messages (
@@ -29,4 +32,7 @@ create table if not exists chat_messages (
 -- 创建索引
 create index if not exists idx_messages_conversation_id on chat_messages(conversation_id);
 create index if not exists idx_messages_created_at on chat_messages(created_at);
+-- 组合索引：针对常见查询 (conversation_id, user_id, created_at)
+create index if not exists idx_messages_conv_user_created 
+  on chat_messages(conversation_id, user_id, created_at desc);
 
