@@ -370,6 +370,16 @@ function ChatPageContent() {
     setLoading(false)
     setMobileMenuOpen(false)
 
+    // 辅助函数：加载第一个真实对话
+    const loadFirstRealConversation = (convList: Conversation[]) => {
+      const firstReal = convList.find(c => !isTemporaryConversation(c.id))
+      if (firstReal) {
+        loadConversation(firstReal.id, true)
+        return true
+      }
+      return false
+    }
+
     const cached = getCachedConversations(assistant.id, true)
     if (cached && cached.length > 0) {
       const sortedCached = sortConversationsWithTemp(cached, isTemporaryConversation)
@@ -379,21 +389,22 @@ function ChatPageContent() {
       })
       setConversationsLoading(false)
       
-      const firstRealConversation = sortedCached.find(c => !isTemporaryConversation(c.id))
-      if (firstRealConversation) {
-        loadConversation(firstRealConversation.id, true)
-      }
+      // 先尝试从缓存加载
+      const loadedFromCache = loadFirstRealConversation(sortedCached)
       
-      fetchConversations(assistant, false)
+      // 后台刷新，刷新完成后如果还没加载对话则自动加载
+      fetchConversations(assistant, false).then(freshConversations => {
+        if (freshConversations && freshConversations.length > 0 && !loadedFromCache) {
+          // 缓存中没有对话但服务器有，加载最新对话
+          loadFirstRealConversation(freshConversations)
+        }
+      })
     } else {
       setConversations(prev => prev.filter(c => isTemporaryConversation(c.id)))
       setConversationsLoading(true)
       const conversations = await fetchConversations(assistant, true)
       if (conversations && conversations.length > 0) {
-        const firstRealConversation = conversations.find(c => !isTemporaryConversation(c.id))
-        if (firstRealConversation) {
-          loadConversation(firstRealConversation.id, true)
-        }
+        loadFirstRealConversation(conversations)
       }
     }
   }
