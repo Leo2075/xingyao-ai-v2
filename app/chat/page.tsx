@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useRef, Suspense } from 'react'
+import { useEffect, useLayoutEffect, useState, useRef, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Assistant, Message, Conversation } from '@/lib/types'
 import ReactMarkdown from 'react-markdown'
@@ -98,7 +98,7 @@ const INPUT_LABELS: Record<string, string> = {
   user: '用户信息',
 }
 
-const CONVERSATION_CACHE_TTL = 60 * 1000 // 60秒
+const CONVERSATION_CACHE_TTL = 5 * 60 * 1000 // 5分钟
 
 const markdownComponents: Components = {
   code({ inline, className, children, ...props }: any) {
@@ -251,9 +251,13 @@ function ChatPageContent() {
     }
   }, [searchParams, assistants, user])
 
-  useEffect(() => {
+  // 使用 useLayoutEffect 确保在 DOM 更新后立即滚动，避免闪烁
+  useLayoutEffect(() => {
     if (!scrollIntentRef.current) return
-    scrollToBottom(scrollIntentRef.current)
+    const container = messagesContainerRef.current
+    if (container) {
+      container.scrollTop = container.scrollHeight
+    }
     scrollIntentRef.current = null
   }, [messages])
 
@@ -285,10 +289,12 @@ function ChatPageContent() {
     }
   }
 
-  const getCachedConversations = (assistantId: string) => {
+  // 获取缓存的对话列表，ignoreExpiry 为 true 时忽略过期时间（用于乐观更新）
+  const getCachedConversations = (assistantId: string, ignoreExpiry = false) => {
     const memory = conversationCacheRef.current.get(assistantId)
     const now = Date.now()
-    if (memory && now - memory.updatedAt < CONVERSATION_CACHE_TTL && memory.data.length > 0) {
+    const isValid = memory && memory.data.length > 0 && (ignoreExpiry || now - memory.updatedAt < CONVERSATION_CACHE_TTL)
+    if (isValid) {
       return memory.data
     }
     if (typeof window !== 'undefined') {
@@ -297,7 +303,9 @@ function ChatPageContent() {
       if (raw) {
         try {
           const parsed = JSON.parse(raw)
-          if (parsed?.data && Array.isArray(parsed.data) && parsed.data.length > 0 && parsed?.updatedAt && now - parsed.updatedAt < CONVERSATION_CACHE_TTL) {
+          const cacheValid = parsed?.data && Array.isArray(parsed.data) && parsed.data.length > 0 && 
+            (ignoreExpiry || (parsed?.updatedAt && now - parsed.updatedAt < CONVERSATION_CACHE_TTL))
+          if (cacheValid) {
             conversationCacheRef.current.set(assistantId, parsed)
             return parsed.data as Conversation[]
           }
@@ -344,7 +352,8 @@ function ChatPageContent() {
     setAdvancedInputs(preset)
     setMobileMenuOpen(false) // Close mobile menu
 
-    const cached = getCachedConversations(assistant.id)
+    // 乐观更新：优先显示缓存（即使过期），后台静默刷新
+    const cached = getCachedConversations(assistant.id, true) // ignoreExpiry = true
     if (cached && cached.length > 0) {
       setConversations(prev => {
         const temps = prev.filter(c => isTemporaryConversation(c.id))
@@ -352,12 +361,13 @@ function ChatPageContent() {
         return merged
       })
       setConversationsLoading(false)
+      // 后台静默刷新，不显示 loading
+      fetchConversations(assistant, false)
     } else {
       setConversations(prev => prev.filter(c => isTemporaryConversation(c.id)))
       setConversationsLoading(true)
+      await fetchConversations(assistant, true)
     }
-
-    await fetchConversations(assistant, !cached || cached.length === 0)
   }
 
   const fetchConversations = async (assistant: Assistant, showLoading = false) => {
@@ -409,11 +419,10 @@ function ChatPageContent() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          assistantId: currentAssistant.id,
           conversationId,
           userId: user?.id,
           cursorRounds,
-          rounds: 3,
+          rounds: 5, // 加载更多时每次加载5轮
         }),
       })
 
@@ -462,46 +471,34 @@ function ChatPageContent() {
 
     setLoading(true)
     try {
-      let allMessages: Message[] = []
-      let cursorRounds = 0
-      let hasMore = true
-      
-      while (hasMore) {
-        const response = await fetch('/api/dify/messages', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            assistantId: currentAssistant.id,
-            conversationId,
-            userId: user?.id,
-            cursorRounds,
-            rounds: 10,
-          }),
-        })
+      // 优化：只加载最近的消息，不再 while 循环加载全部
+      const response = await fetch('/api/dify/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId,
+          userId: user?.id,
+          cursorRounds: 0,
+          rounds: 15, // 加载最近 15 轮 = 30 条消息
+        }),
+      })
 
-        const data = await response.json()
-        if (response.ok && data.messages && data.messages.length > 0) {
-          const normalized = sortMessages(data.messages.map(normalizeMessage))
-          const existingIds = new Set(allMessages.map(m => m.id))
-          const newMessages = normalized.filter(m => !existingIds.has(m.id))
-          allMessages = sortMessages([...newMessages, ...allMessages])
-          hasMore = data.nextCursorRounds != null
-          cursorRounds = data.nextCursorRounds ?? 0
-        } else {
-          hasMore = false
-        }
-      }
-      
+      const data = await response.json()
       if (currentConversationIdRef.current === conversationId) {
-        setMessages(allMessages)
-        setCurrentCursorRounds(cursorRounds > 0 ? cursorRounds : null)
-        // 使用 setTimeout 确保渲染完成后再滚动，且不使用 smooth
-        setTimeout(() => {
-          const container = messagesContainerRef.current
-          if (container) {
-            container.scrollTop = container.scrollHeight
-          }
-        }, 0)
+        if (response.ok && data.messages) {
+          const normalized = sortMessages(data.messages.map(normalizeMessage))
+          setMessages(normalized)
+          setCurrentCursorRounds(data.nextCursorRounds ?? null)
+        }
+        // 使用双重 requestAnimationFrame 确保 DOM 更新后再滚动
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const container = messagesContainerRef.current
+            if (container) {
+              container.scrollTop = container.scrollHeight
+            }
+          })
+        })
       }
     } catch (error) {
       console.error('加载对话历史失败:', error)

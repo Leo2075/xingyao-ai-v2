@@ -16,28 +16,14 @@ import { supabase } from '@/lib/supabase'
  */
 export async function POST(request: NextRequest) {
   try {
-    const { assistantId, conversationId, userId, cursorRounds = 0, rounds = 3 } =
+    const { conversationId, userId, cursorRounds = 0, rounds = 3 } =
       await request.json()
 
-    // 参数校验
-    if (!assistantId || !conversationId) {
+    // 参数校验：只需要 conversationId（已通过外键关联助手）
+    if (!conversationId) {
       return NextResponse.json(
-        { error: '缺少必要参数' },
+        { error: '缺少 conversationId' },
         { status: 400 }
-      )
-    }
-
-    // 验证助手是否存在
-    const { data: assistant, error } = await supabase
-      .from('assistants')
-      .select('id')
-      .eq('id', assistantId)
-      .maybeSingle()
-
-    if (error || !assistant) {
-      return NextResponse.json(
-        { error: '助手不存在' },
-        { status: 404 }
       )
     }
 
