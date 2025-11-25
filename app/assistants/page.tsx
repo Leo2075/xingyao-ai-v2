@@ -4,31 +4,9 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Assistant } from '@/lib/types'
 import { 
-  Brain, 
-  Video, 
-  Target, 
-  FileText, 
-  Film, 
-  MessageSquare, 
-  BarChart3, 
-  Users, 
-  DollarSign,
   LogOut,
-  Sparkles,
   ArrowRight
 } from 'lucide-react'
-
-const iconMap: { [key: string]: any } = {
-  'brain': Brain,
-  'video': Video,
-  'target': Target,
-  'file-text': FileText,
-  'film': Film,
-  'message-square': MessageSquare,
-  'bar-chart': BarChart3,
-  'users': Users,
-  'dollar-sign': DollarSign,
-}
 
 export default function AssistantsPage() {
   const [assistants, setAssistants] = useState<Assistant[]>([])
@@ -69,11 +47,6 @@ export default function AssistantsPage() {
     router.push('/')
   }
 
-  const getIcon = (iconName?: string) => {
-    if (!iconName) return Brain
-    return iconMap[iconName] || Brain
-  }
-
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -91,9 +64,11 @@ export default function AssistantsPage() {
       <header className="bg-white/80 backdrop-blur-lg border-b border-gray-200 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center space-x-3">
-            <div className="w-9 h-9 bg-primary/10 rounded-xl flex items-center justify-center">
-              <Sparkles className="w-5 h-5 text-primary fill-current" />
-            </div>
+            <img 
+              src="/logo.png" 
+              alt="Logo" 
+              className="w-9 h-9 rounded-xl object-cover"
+            />
             <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-blue-700">
               星耀AI
             </span>
@@ -130,7 +105,7 @@ export default function AssistantsPage() {
         {/* Assistants Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-fade-in" style={{ animationDelay: '0.1s' }}>
           {assistants.map((assistant) => {
-            const Icon = getIcon(assistant.icon_name)
+            const iconName = assistant.icon_name || 'sparkles'
             
             return (
               <div
@@ -143,7 +118,11 @@ export default function AssistantsPage() {
                 
                 <div className="relative z-10">
                   <div className="w-14 h-14 bg-white rounded-xl shadow-sm border border-gray-100 flex items-center justify-center mb-5 group-hover:border-primary/20 group-hover:bg-primary/5 transition-colors">
-                    <Icon className="w-7 h-7 text-gray-700 group-hover:text-primary transition-colors" />
+                    <img 
+                      src={`/icons/${iconName}.png`}
+                      alt={assistant.name}
+                      className="w-8 h-8 object-contain"
+                    />
                   </div>
                   
                   <h3 className="text-xl font-bold text-gray-900 mb-2 group-hover:text-primary transition-colors">
@@ -166,9 +145,11 @@ export default function AssistantsPage() {
 
         {assistants.length === 0 && (
           <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-gray-200">
-            <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Brain className="w-8 h-8 text-gray-300" />
-            </div>
+            <img 
+              src="/logo.png"
+              alt="暂无助手"
+              className="w-16 h-16 rounded-full mx-auto mb-4 opacity-30"
+            />
             <p className="text-gray-500 font-medium">暂无可用助手</p>
             <p className="text-sm text-gray-400 mt-2">请联系管理员添加助手配置</p>
           </div>

@@ -7,15 +7,6 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Components } from 'react-markdown'
 import {
-  Brain,
-  Video,
-  Target,
-  FileText,
-  Film,
-  MessageSquare,
-  BarChart3,
-  Users,
-  DollarSign,
   Send,
   Menu,
   X,
@@ -25,22 +16,8 @@ import {
   LogOut,
   MoreHorizontal,
   Square,
-  History,
-  Sparkles
+  History
 } from 'lucide-react'
-
-const iconMap: { [key: string]: any } = {
-  'brain': Brain,
-  'video': Video,
-  'target': Target,
-  'file-text': FileText,
-  'film': Film,
-  'message-square': MessageSquare,
-  'bar-chart': BarChart3,
-  'users': Users,
-  'dollar-sign': DollarSign,
-  'sparkles': Sparkles,
-}
 
 const toSeconds = (value: any) => {
   if (typeof value === 'number') {
@@ -773,15 +750,13 @@ function ChatPageContent() {
     router.push('/')
   }
 
-  const getIcon = (iconName?: string) => iconMap[iconName || 'sparkles'] || Sparkles
-
   // --- Render Helpers ---
 
   return (
     <div className="flex h-[100dvh] bg-gray-50 overflow-hidden font-sans text-gray-900">
       <head>
         {assistants.map(a => (
-           <link key={a.id} rel="preload" as="image" href={`/icons/${a.icon_name}.svg`} />
+           <link key={a.id} rel="preload" as="image" href={`/icons/${a.icon_name || 'sparkles'}.png`} />
         ))}
       </head>
 
@@ -820,9 +795,11 @@ function ChatPageContent() {
           <div className="p-4 flex items-center justify-between h-16">
              {!leftSidebarCollapsed && (
                <div className="flex items-center space-x-3 font-bold text-lg tracking-tight text-slate-800 animate-fade-in">
-                 <div className="w-9 h-9 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/20">
-                   <Sparkles className="w-5 h-5 text-white fill-white/20" />
-                 </div>
+                 <img 
+                   src="/logo.png" 
+                   alt="Logo" 
+                   className="w-9 h-9 rounded-xl shadow-lg shadow-blue-500/20 object-cover"
+                 />
                  <span>星耀AI</span>
                </div>
              )}
@@ -837,8 +814,8 @@ function ChatPageContent() {
           {/* Assistant List */}
           <div className="flex-1 overflow-y-auto py-4 px-3 space-y-1 custom-scrollbar">
             {assistants.map((assistant) => {
-              const Icon = getIcon(assistant.icon_name)
               const isActive = currentAssistant?.id === assistant.id
+              const iconName = assistant.icon_name || 'sparkles'
               
               return (
                 <button
@@ -853,10 +830,14 @@ function ChatPageContent() {
                   title={assistant.name}
                 >
                   <div className={`
-                    relative w-10 h-10 rounded-lg flex items-center justify-center transition-all duration-300
-                    ${isActive ? 'bg-white/20 text-white' : 'bg-slate-100 group-hover:bg-white text-slate-400 group-hover:text-blue-500'}
+                    relative w-10 h-10 rounded-lg flex items-center justify-center transition-all duration-300 overflow-hidden
+                    ${isActive ? 'bg-white/20' : 'bg-slate-100 group-hover:bg-white'}
                   `}>
-                    <Icon className="w-5 h-5" />
+                    <img 
+                      src={`/icons/${iconName}.png`} 
+                      alt={assistant.name}
+                      className="w-6 h-6 object-contain"
+                    />
                   </div>
                   {!leftSidebarCollapsed && (
                     <span className="relative text-sm font-medium truncate flex-1 text-left animate-fade-in">
@@ -1027,9 +1008,11 @@ function ChatPageContent() {
         >
           {!currentAssistant ? (
             <div className="h-full flex flex-col items-center justify-center text-gray-400 animate-fade-in">
-              <div className="w-20 h-20 bg-gray-100 rounded-2xl flex items-center justify-center mb-6">
-                <Brain className="w-10 h-10 text-gray-300" />
-              </div>
+              <img 
+                src="/logo.png" 
+                alt="星耀AI"
+                className="w-20 h-20 rounded-2xl mb-6 opacity-50"
+              />
               <h2 className="text-xl font-semibold text-gray-600 mb-2">欢迎使用星耀AI</h2>
               <p>请从左侧选择一个AI助手开始创作</p>
             </div>
@@ -1041,9 +1024,11 @@ function ChatPageContent() {
             </div>
           ) : messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center animate-fade-in">
-              <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl flex items-center justify-center mb-6 shadow-xl shadow-blue-500/20">
-                <Sparkles className="w-8 h-8 text-white fill-white/20" />
-              </div>
+              <img 
+                src={`/icons/${currentAssistant.icon_name || 'sparkles'}.png`}
+                alt={currentAssistant.name}
+                className="w-16 h-16 rounded-2xl mb-6 shadow-xl shadow-blue-500/20 object-contain bg-gradient-to-br from-blue-500 to-indigo-600 p-3"
+              />
               <h2 className="text-2xl font-bold text-gray-900 mb-3">
                 {currentAssistant.name}
               </h2>
