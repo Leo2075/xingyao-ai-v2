@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useLayoutEffect, useState, useRef, Suspense } from 'react'
+import { useEffect, useLayoutEffect, useState, useRef, Suspense, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Assistant, Message, Conversation } from '@/lib/types'
 import ReactMarkdown from 'react-markdown'
@@ -18,6 +18,25 @@ import {
   Square,
   History
 } from 'lucide-react'
+
+// ==================== 类型定义 ====================
+
+/** 对话状态（用于全局状态存储） */
+interface ConversationState {
+  messages: Message[]
+  isTyping: boolean
+  isLoading: boolean
+  cursorRounds: number | null
+}
+
+/** 活跃流信息 */
+interface ActiveStream {
+  conversationId: string
+  assistantId: string
+  abortController: AbortController
+}
+
+// ==================== 工具函数 ====================
 
 const toSeconds = (value: any) => {
   if (typeof value === 'number') {
@@ -153,9 +172,13 @@ function ChatPageContent() {
   const loadingMoreRef = useRef(false)
   const scrollIntentRef = useRef<'instant' | 'smooth' | null>(null)
   const currentConversationIdRef = useRef<string>('')
-  const activeStreamRef = useRef<{ id: string; assistantId: string } | null>(null)
   const menuRefs = useRef<Map<string, HTMLElement>>(new Map())
-  const abortControllerRef = useRef<AbortController | null>(null)
+  
+  // ==================== 全局会话状态管理 ====================
+  /** 存储所有对话的状态（消息、输出状态等） */
+  const conversationStatesRef = useRef<Map<string, ConversationState>>(new Map())
+  /** 存储所有活跃的流请求 */
+  const activeStreamsRef = useRef<Map<string, ActiveStream>>(new Map())
   
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -163,21 +186,57 @@ function ChatPageContent() {
   
   const isTemporaryConversation = (id?: string) => Boolean(id && id.startsWith('temp-'))
 
+  // ==================== 状态存储与恢复 ====================
+  
+  /** 保存当前对话状态到全局 Map */
+  const saveCurrentConversationState = useCallback(() => {
+    if (!currentConversationId) return
+    conversationStatesRef.current.set(currentConversationId, {
+      messages: [...messages],
+      isTyping: assistantTyping,
+      isLoading: loading,
+      cursorRounds: currentCursorRounds,
+    })
+  }, [currentConversationId, messages, assistantTyping, loading, currentCursorRounds])
+
+  /** 从全局 Map 恢复对话状态 */
+  const restoreConversationState = useCallback((conversationId: string): ConversationState | null => {
+    return conversationStatesRef.current.get(conversationId) || null
+  }, [])
+
+  /** 更新指定对话的状态（用于后台流更新） */
+  const updateConversationState = useCallback((
+    conversationId: string,
+    updater: (state: ConversationState) => ConversationState
+  ) => {
+    const current = conversationStatesRef.current.get(conversationId) || {
+      messages: [],
+      isTyping: false,
+      isLoading: false,
+      cursorRounds: null,
+    }
+    conversationStatesRef.current.set(conversationId, updater(current))
+    
+    // 如果是当前显示的对话，同步更新 UI
+    if (currentConversationIdRef.current === conversationId) {
+      const updated = conversationStatesRef.current.get(conversationId)!
+      setMessages(updated.messages)
+      setAssistantTyping(updated.isTyping)
+      setLoading(updated.isLoading)
+    }
+  }, [])
+
   // Scroll Helpers
-  // instant: 瞬时滚动（加载历史消息时使用），smooth: 平滑滚动（新消息时使用）
   const requestScrollToBottom = (mode: 'instant' | 'smooth' = 'instant') => {
     scrollIntentRef.current = mode
   }
 
-  // 滚动到底部，instant 为 true 时瞬时滚动（用于加载历史消息）
   const scrollToBottom = (instant = true) => {
     const container = messagesContainerRef.current
     if (!container) return
     if (instant) {
-      // 瞬时滚动，不产生动画
       container.scrollTop = container.scrollHeight
     } else {
-      // 平滑滚动，用于新消息
       container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
     }
   }
@@ -204,7 +263,6 @@ function ChatPageContent() {
     }
     setUser(JSON.parse(userData))
     
-    // Restore sidebar state only on desktop
     if (window.innerWidth >= 768) {
       const storedLeft = localStorage.getItem('chat_left_collapsed')
       if (storedLeft !== null) setLeftSidebarCollapsed(storedLeft === '1')
@@ -225,7 +283,6 @@ function ChatPageContent() {
     }
   }, [searchParams, assistants, user])
 
-  // 使用 useLayoutEffect 确保在 DOM 更新后立即滚动，避免闪烁
   useLayoutEffect(() => {
     if (!scrollIntentRef.current) return
     const mode = scrollIntentRef.current
@@ -261,7 +318,6 @@ function ChatPageContent() {
     }
   }
 
-  // 获取缓存的对话列表，ignoreExpiry 为 true 时忽略过期时间（用于乐观更新）
   const getCachedConversations = (assistantId: string, ignoreExpiry = false) => {
     const memory = conversationCacheRef.current.get(assistantId)
     const now = Date.now()
@@ -302,15 +358,19 @@ function ChatPageContent() {
     }
   }
 
+  // ==================== 切换助手（不中断请求） ====================
   const selectAssistant = async (assistant: Assistant) => {
-    activeStreamRef.current = null
+    // 保存当前对话状态（不中断流请求）
+    saveCurrentConversationState()
+    
     setCurrentAssistant(assistant)
     setMessages([])
     setCurrentConversationId('')
-    setMobileMenuOpen(false) // Close mobile menu
+    setAssistantTyping(false)
+    setLoading(false)
+    setMobileMenuOpen(false)
 
-    // 乐观更新：优先显示缓存（即使过期），后台静默刷新
-    const cached = getCachedConversations(assistant.id, true) // ignoreExpiry = true
+    const cached = getCachedConversations(assistant.id, true)
     if (cached && cached.length > 0) {
       const sortedCached = sortConversationsWithTemp(cached, isTemporaryConversation)
       setConversations(prev => {
@@ -319,23 +379,20 @@ function ChatPageContent() {
       })
       setConversationsLoading(false)
       
-      // 自动加载最新的历史对话（第一个非临时对话）
       const firstRealConversation = sortedCached.find(c => !isTemporaryConversation(c.id))
       if (firstRealConversation) {
-        loadConversation(firstRealConversation.id, true) // skipAssistantCheck = true
+        loadConversation(firstRealConversation.id, true)
       }
       
-      // 后台静默刷新，不显示 loading
       fetchConversations(assistant, false)
     } else {
       setConversations(prev => prev.filter(c => isTemporaryConversation(c.id)))
       setConversationsLoading(true)
-      // 获取对话列表并自动加载最新对话
       const conversations = await fetchConversations(assistant, true)
       if (conversations && conversations.length > 0) {
         const firstRealConversation = conversations.find(c => !isTemporaryConversation(c.id))
         if (firstRealConversation) {
-          loadConversation(firstRealConversation.id, true) // skipAssistantCheck = true
+          loadConversation(firstRealConversation.id, true)
         }
       }
     }
@@ -380,7 +437,6 @@ function ChatPageContent() {
     }
   }
 
-  // Conversation & Message Logic (Same as before but simplified where possible)
   const fetchConversationMessages = async (
     conversationId: string,
     cursorRounds = 0,
@@ -396,7 +452,7 @@ function ChatPageContent() {
           conversationId,
           userId: user?.id,
           cursorRounds,
-          rounds: 5, // 加载更多时每次加载5轮
+          rounds: 5,
         }),
       })
 
@@ -430,23 +486,46 @@ function ChatPageContent() {
     }
   }
 
+  // ==================== 加载对话（优先恢复状态） ====================
   const loadConversation = async (conversationId: string, skipAssistantCheck = false) => {
-    activeStreamRef.current = null
-    // skipAssistantCheck 用于从 selectAssistant 调用时跳过检查（此时 state 可能还未更新）
     if (!skipAssistantCheck && !currentAssistant) return
+    
+    // 保存当前对话状态
+    saveCurrentConversationState()
+    
     setCurrentConversationId(conversationId)
     currentConversationIdRef.current = conversationId
+    setShowLoadMoreHint(false)
+    setMobileHistoryOpen(false)
+
+    // 尝试从全局状态恢复
+    const savedState = restoreConversationState(conversationId)
+    if (savedState && savedState.messages.length > 0) {
+      // 恢复保存的状态
+      setMessages(savedState.messages)
+      setAssistantTyping(savedState.isTyping)
+      setLoading(savedState.isLoading)
+      setCurrentCursorRounds(savedState.cursorRounds)
+      requestScrollToBottom('instant')
+      return
+    }
+
+    // 临时对话不需要加载
+    if (isTemporaryConversation(conversationId)) {
+      setMessages([])
+      setCurrentCursorRounds(null)
+      setAssistantTyping(false)
+      setLoading(false)
+      return
+    }
+
+    // 从服务器加载
     setMessages([])
     setCurrentCursorRounds(null)
     setAssistantTyping(false)
-    setShowLoadMoreHint(false)
-    setMobileHistoryOpen(false) // Close mobile history
-
-    if (isTemporaryConversation(conversationId)) return
-
     setLoading(true)
+    
     try {
-      // 优化：只加载最近的消息，不再 while 循环加载全部
       const response = await fetch('/api/dify/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -454,7 +533,7 @@ function ChatPageContent() {
           conversationId,
           userId: user?.id,
           cursorRounds: 0,
-          rounds: 15, // 加载最近 15 轮 = 30 条消息
+          rounds: 15,
         }),
       })
 
@@ -465,7 +544,6 @@ function ChatPageContent() {
           setMessages(normalized)
           setCurrentCursorRounds(data.nextCursorRounds ?? null)
         }
-        // 使用双重 requestAnimationFrame 确保 DOM 更新后再滚动
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             const container = messagesContainerRef.current
@@ -483,7 +561,9 @@ function ChatPageContent() {
   }
 
   const startNewConversation = () => {
-    activeStreamRef.current = null
+    // 保存当前对话状态
+    saveCurrentConversationState()
+    
     const timestamp = Math.floor(Date.now() / 1000)
     const tempConversation: Conversation = {
       id: `temp-${Date.now()}`,
@@ -495,6 +575,8 @@ function ChatPageContent() {
     setCurrentConversationId(tempConversation.id)
     setMessages([])
     setCurrentCursorRounds(null)
+    setAssistantTyping(false)
+    setLoading(false)
     requestScrollToBottom('instant')
     setMobileHistoryOpen(false)
   }
@@ -530,6 +612,17 @@ function ChatPageContent() {
       setActionMenuId('')
       return
     }
+    
+    // 清除该对话的全局状态
+    conversationStatesRef.current.delete(conversationId)
+    
+    // 取消该对话的活跃流
+    const activeStream = activeStreamsRef.current.get(conversationId)
+    if (activeStream) {
+      activeStream.abortController.abort()
+      activeStreamsRef.current.delete(conversationId)
+    }
+    
     const previousConversations = conversations
     setConversations(prev => prev.filter(c => c.id !== conversationId))
 
@@ -537,6 +630,8 @@ function ChatPageContent() {
       setCurrentConversationId('')
       setMessages([])
       setCurrentCursorRounds(null)
+      setAssistantTyping(false)
+      setLoading(false)
       requestScrollToBottom('instant')
     }
 
@@ -559,22 +654,39 @@ function ChatPageContent() {
     }
   }
 
-  const stopGeneration = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-      abortControllerRef.current = null
-      setLoading(false)
-      setAssistantTyping(false)
-      setMessages(prev => {
-        const lastMsg = prev[prev.length - 1]
-        if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.content) {
-          return prev.slice(0, -1)
-        }
-        return prev
-      })
+  const stopGeneration = (conversationId?: string) => {
+    const targetId = conversationId || currentConversationId
+    const activeStream = activeStreamsRef.current.get(targetId)
+    if (activeStream) {
+      activeStream.abortController.abort()
+      activeStreamsRef.current.delete(targetId)
+      
+      // 更新状态
+      if (currentConversationIdRef.current === targetId) {
+        setLoading(false)
+        setAssistantTyping(false)
+        setMessages(prev => {
+          const lastMsg = prev[prev.length - 1]
+          if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.content) {
+            return prev.slice(0, -1)
+          }
+          return prev
+        })
+      }
+      
+      // 更新全局状态
+      updateConversationState(targetId, state => ({
+        ...state,
+        isTyping: false,
+        isLoading: false,
+        messages: state.messages.filter((m, i) => 
+          !(i === state.messages.length - 1 && m.role === 'assistant' && !m.content)
+        ),
+      }))
     }
   }
 
+  // ==================== 发送消息（支持后台继续） ====================
   const sendMessage = async () => {
     if (!inputMessage.trim() || !currentAssistant || loading) return
 
@@ -594,12 +706,7 @@ function ChatPageContent() {
 
     const sessionConversationKey = conversationKey
     const assistantSnapshot = currentAssistant
-    const sessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    const currentSession = { id: sessionId, assistantId: assistantSnapshot.id }
-    activeStreamRef.current = currentSession
-    const isActiveSession = () =>
-      activeStreamRef.current?.id === currentSession.id &&
-      activeStreamRef.current?.assistantId === currentSession.assistantId
+    const messageContent = inputMessage
     const conversationIdForRequest = conversationKey && !isTemporaryConversation(conversationKey)
       ? conversationKey
       : undefined
@@ -607,17 +714,40 @@ function ChatPageContent() {
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: inputMessage,
+      content: messageContent,
       created_at: Date.now(),
     }
 
+    const aiMessageId = (Date.now() + 1).toString()
+    let aiMessage: Message = {
+      id: aiMessageId,
+      role: 'assistant',
+      content: '',
+      created_at: Date.now(),
+    }
+
+    // 更新当前 UI
     setMessages(prev => sortMessages([...prev, userMessage]))
     requestScrollToBottom('instant')
     setInputMessage('')
     setLoading(true)
     setAssistantTyping(true)
 
-    abortControllerRef.current = new AbortController()
+    // 保存到全局状态
+    updateConversationState(sessionConversationKey, state => ({
+      ...state,
+      messages: sortMessages([...state.messages, userMessage]),
+      isTyping: true,
+      isLoading: true,
+    }))
+
+    // 创建 AbortController
+    const abortController = new AbortController()
+    activeStreamsRef.current.set(sessionConversationKey, {
+      conversationId: sessionConversationKey,
+      assistantId: assistantSnapshot.id,
+      abortController,
+    })
 
     try {
       const response = await fetch('/api/dify/chat', {
@@ -625,42 +755,65 @@ function ChatPageContent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           assistantId: currentAssistant.id,
-          message: inputMessage,
+          message: messageContent,
           conversationId: conversationIdForRequest || undefined,
           userId: user?.id,
         }),
-        signal: abortControllerRef.current.signal,
+        signal: abortController.signal,
       })
 
       if (!response.ok) throw new Error('发送消息失败')
 
       const decoder = new TextDecoder()
-      let aiMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: '',
-        created_at: Date.now(),
-      }
 
+      /** 更新助手消息（同时更新 UI 和全局状态） */
       const updateAssistantMessage = () => {
-        if (isActiveSession()) {
-          setMessages(prev => {
-            const updated = [...prev]
-            const index = updated.findIndex((msg) => msg.id === aiMessage.id)
-            if (index === -1) updated.push(aiMessage)
-            else updated[index] = { ...aiMessage }
-            return sortMessages(updated)
-          })
+        // 更新全局状态
+        updateConversationState(sessionConversationKey, state => {
+          const updated = [...state.messages]
+          const index = updated.findIndex(msg => msg.id === aiMessageId)
+          if (index === -1) {
+            updated.push({ ...aiMessage })
+          } else {
+            updated[index] = { ...aiMessage }
+          }
+          return { ...state, messages: sortMessages(updated) }
+        })
+        
+        // 如果是当前显示的对话，滚动到底部
+        if (currentConversationIdRef.current === sessionConversationKey) {
           requestScrollToBottom('smooth')
         }
       }
 
+      // 初始添加空的助手消息
       updateAssistantMessage()
 
       const handleMessageEnd = async (payload: any) => {
         if (!payload?.conversation_id || !assistantSnapshot) return
         const resolvedName = payload.conversation_name || payload.conversation?.name || '新的对话'
         const shouldUpdateConversation = isTemporaryConversation(sessionConversationKey)
+        
+        // 更新对话 ID（从临时 ID 变为真实 ID）
+        if (shouldUpdateConversation) {
+          // 迁移全局状态
+          const oldState = conversationStatesRef.current.get(sessionConversationKey)
+          if (oldState) {
+            conversationStatesRef.current.delete(sessionConversationKey)
+            conversationStatesRef.current.set(payload.conversation_id, oldState)
+          }
+          
+          // 迁移活跃流
+          const oldStream = activeStreamsRef.current.get(sessionConversationKey)
+          if (oldStream) {
+            activeStreamsRef.current.delete(sessionConversationKey)
+            activeStreamsRef.current.set(payload.conversation_id, {
+              ...oldStream,
+              conversationId: payload.conversation_id,
+            })
+          }
+        }
+        
         setCurrentConversationId((prevId) => {
           const isCurrentSession = prevId === sessionConversationKey || prevId === payload.conversation_id
           if (shouldUpdateConversation || isCurrentSession) {
@@ -680,11 +833,16 @@ function ChatPageContent() {
           }
           return prevId
         })
+        
+        // 更新 ref
+        if (currentConversationIdRef.current === sessionConversationKey) {
+          currentConversationIdRef.current = payload.conversation_id
+        }
+        
         await fetchConversations(assistantSnapshot)
       }
 
       const processChunk = async (chunk: string) => {
-        if (!isActiveSession()) return
         const lines = chunk.split('\n')
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue
@@ -694,10 +852,23 @@ function ChatPageContent() {
             const jsonData = JSON.parse(payload)
             if (jsonData.event === 'message') {
               aiMessage.content += jsonData.answer || ''
-              setAssistantTyping(false)
+              
+              // 更新全局状态中的 typing 状态
+              updateConversationState(sessionConversationKey, state => ({
+                ...state,
+                isTyping: false,
+              }))
+              
+              // 如果是当前对话，也更新 UI
+              if (currentConversationIdRef.current === sessionConversationKey) {
+                setAssistantTyping(false)
+              }
+              
               updateAssistantMessage()
             }
-            if (jsonData.event === 'message_end') await handleMessageEnd(jsonData)
+            if (jsonData.event === 'message_end') {
+              await handleMessageEnd(jsonData)
+            }
           } catch (e) {}
         }
       }
@@ -718,17 +889,35 @@ function ChatPageContent() {
     } catch (error: any) {
       if (error.name === 'AbortError') return
       console.error('发送消息失败:', error)
+      
       const fallbackMessage: Message = {
         id: Date.now().toString(),
         role: 'assistant',
         content: '抱歉，发送消息时出现错误，请重试。',
         created_at: Date.now(),
       }
-      setMessages(prev => sortMessages([...prev, fallbackMessage]))
+      
+      // 更新全局状态
+      updateConversationState(sessionConversationKey, state => ({
+        ...state,
+        messages: sortMessages([...state.messages, fallbackMessage]),
+      }))
     } finally {
-      setLoading(false)
-      setAssistantTyping(false)
-      abortControllerRef.current = null
+      // 清理活跃流
+      activeStreamsRef.current.delete(sessionConversationKey)
+      
+      // 更新状态
+      updateConversationState(sessionConversationKey, state => ({
+        ...state,
+        isTyping: false,
+        isLoading: false,
+      }))
+      
+      // 如果是当前对话，也更新 UI
+      if (currentConversationIdRef.current === sessionConversationKey) {
+        setLoading(false)
+        setAssistantTyping(false)
+      }
     }
   }
 
@@ -768,7 +957,8 @@ function ChatPageContent() {
     router.push('/')
   }
 
-  // --- Render Helpers ---
+  // 检查当前对话是否有活跃的流
+  const hasActiveStream = activeStreamsRef.current.has(currentConversationId)
 
   return (
     <div className="flex h-[100dvh] bg-gray-50 overflow-hidden font-sans text-gray-900">
@@ -1033,7 +1223,6 @@ function ChatPageContent() {
               <p>请从左侧选择一个AI助手开始创作</p>
             </div>
           ) : loading && messages.length === 0 ? (
-            // 加载历史消息时的加载动画
             <div className="h-full flex flex-col items-center justify-center animate-fade-in">
               <div className="w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-4" />
               <p className="text-gray-500 font-medium">加载对话历史...</p>
@@ -1162,9 +1351,9 @@ function ChatPageContent() {
                    />
                    
                    <div className="flex items-center pb-1.5 pr-1.5 space-x-2">
-                     {loading && abortControllerRef.current ? (
+                     {(loading || hasActiveStream) ? (
                        <button
-                         onClick={stopGeneration}
+                         onClick={() => stopGeneration()}
                          className="p-2.5 bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-all duration-200 active:scale-95"
                          title="停止生成"
                        >

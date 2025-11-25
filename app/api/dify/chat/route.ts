@@ -47,10 +47,23 @@ export async function POST(request: NextRequest) {
       resolvedConversationId = generateConversationId()
     }
 
-    // 4. 创建流式响应
+    // 4. 生成对话名称
+    const conversationName = generateConversationName(message)
+
+    // 5. **立即保存用户消息到数据库**（不等待 AI 响应）
+    await saveUserMessage({
+      conversationId: resolvedConversationId,
+      userIdentifier,
+      assistantId,
+      userMessage: message,
+      userMessageTimestamp,
+      conversationName,
+      isNewConversation,
+    })
+
+    // 6. 创建流式响应
     const encoder = new TextEncoder()
     let aggregatedAnswer = ''
-    let conversationName = ''
     let isAborted = false
     let isClosed = false  // 跟踪控制器状态，防止重复关闭
 
@@ -86,10 +99,21 @@ export async function POST(request: NextRequest) {
             resolvedConversationId,
             userId
           )) {
-            // 检查是否已中断
-            if (isAborted || isClosed) {
-              safeClose()
-              return
+            // 检查是否已中断 - 即使中断也继续处理，确保数据被保存
+            if (isClosed) {
+              // 流已关闭，但继续累积内容用于保存
+              if (chunk.content) {
+                aggregatedAnswer += chunk.content
+              }
+              if (chunk.isComplete) {
+                // 保存助手回复到数据库
+                await saveAssistantReply({
+                  conversationId: resolvedConversationId,
+                  userIdentifier,
+                  assistantAnswer: aggregatedAnswer,
+                })
+              }
+              continue
             }
 
             // 处理内容块
@@ -106,21 +130,12 @@ export async function POST(request: NextRequest) {
 
             // 处理完成信号
             if (chunk.isComplete) {
-              // 生成对话名称（取用户消息前20字）
-              if (!conversationName) {
-                conversationName = generateConversationName(message)
-              }
-
-              // 保存到数据库（异步，不阻塞响应）
-              persistMessages({
+              // 保存助手回复到数据库
+              saveAssistantReply({
                 conversationId: resolvedConversationId,
                 userIdentifier,
-                assistantId,
-                userMessage: message,
                 assistantAnswer: aggregatedAnswer,
-                userMessageTimestamp,
-                conversationName,
-              }).catch(err => console.error('[Chat] 保存消息失败:', err))
+              }).catch(err => console.error('[Chat] 保存助手回复失败:', err))
 
               // 发送结束事件
               const endData = JSON.stringify({
@@ -139,6 +154,15 @@ export async function POST(request: NextRequest) {
         } catch (error: any) {
           console.error('[Chat] 流处理错误:', error)
           
+          // 即使出错，也保存已有的助手回复
+          if (aggregatedAnswer) {
+            saveAssistantReply({
+              conversationId: resolvedConversationId,
+              userIdentifier,
+              assistantAnswer: aggregatedAnswer,
+            }).catch(err => console.error('[Chat] 保存部分回复失败:', err))
+          }
+          
           // 发送错误事件给前端
           const errorData = JSON.stringify({
             event: 'error',
@@ -153,6 +177,7 @@ export async function POST(request: NextRequest) {
     // 监听请求中断（用户关闭页面等）
     request.signal?.addEventListener('abort', () => {
       isAborted = true
+      // 注意：即使中断，流处理会继续完成以保存数据
     })
 
     return new Response(stream, {
@@ -171,42 +196,50 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// ==================== 保存消息到数据库 ====================
+// ==================== 保存用户消息到数据库 ====================
 /**
- * 将对话消息持久化到 Supabase
- * 包括会话记录和消息记录
+ * 立即保存用户消息（在 AI 响应前）
+ * 确保用户消息不会因为中断而丢失
  */
-async function persistMessages({
+async function saveUserMessage({
   conversationId,
   userIdentifier,
   assistantId,
   userMessage,
-  assistantAnswer,
   userMessageTimestamp,
   conversationName,
+  isNewConversation,
 }: {
   conversationId: string
   userIdentifier: string
   assistantId: string
   userMessage: string
-  assistantAnswer: string
   userMessageTimestamp: Date
-  conversationName?: string
+  conversationName: string
+  isNewConversation: boolean
 }) {
   try {
     const now = new Date()
-    // 用户消息时间稍早，确保消息顺序正确
-    const userMessageTime = new Date(userMessageTimestamp.getTime() - 100)
 
-    // 1. 先检查对话是否已存在
-    const { data: existingConv } = await supabase
-      .from('chat_conversations')
-      .select('id, title')
-      .eq('id', conversationId)
-      .maybeSingle()
+    if (isNewConversation) {
+      // 新对话，创建会话记录
+      const { error: insertError } = await supabase
+        .from('chat_conversations')
+        .insert({
+          id: conversationId,
+          user_id: userIdentifier,
+          assistant_id: assistantId,
+          title: conversationName,
+          created_at: now.toISOString(),
+          updated_at: now.toISOString(),
+        })
 
-    if (existingConv) {
-      // 对话已存在，只更新 updated_at，不覆盖标题（保护用户重命名）
+      if (insertError) {
+        console.error('[Chat] 创建会话失败:', insertError)
+        throw insertError
+      }
+    } else {
+      // 已有对话，更新时间
       const { error: updateError } = await supabase
         .from('chat_conversations')
         .update({ updated_at: now.toISOString() })
@@ -216,73 +249,82 @@ async function persistMessages({
         console.error('[Chat] 更新会话时间失败:', updateError)
         throw updateError
       }
-    } else {
-      // 新对话，插入完整记录（包含自动生成的标题）
-      const { error: insertError } = await supabase
-        .from('chat_conversations')
-        .insert({
-          id: conversationId,
-          user_id: userIdentifier,
-          assistant_id: assistantId,
-          title: conversationName || null,
-          created_at: now.toISOString(),
-          updated_at: now.toISOString(),
-        })
-
-      if (insertError) {
-        console.error('[Chat] 创建会话失败:', insertError)
-        throw insertError
-      }
     }
 
-    // 2. 检查消息是否已存在（防止重复插入）
-    const userMessageTimeStr = userMessageTime.toISOString()
-    const assistantMessageTimeStr = now.toISOString()
-    
-    const { data: existingUserMsg } = await supabase
-      .from('chat_messages')
-      .select('id')
-      .eq('conversation_id', conversationId)
-      .eq('role', 'user')
-      .eq('content', userMessage)
-      .gte('created_at', new Date(userMessageTime.getTime() - 5000).toISOString())
-      .lte('created_at', new Date(userMessageTime.getTime() + 5000).toISOString())
-      .limit(1)
-      .maybeSingle()
+    // 插入用户消息
+    const { error: msgError } = await supabase.from('chat_messages').insert({
+      conversation_id: conversationId,
+      role: 'user',
+      content: userMessage,
+      user_id: userIdentifier,
+      created_at: userMessageTimestamp.toISOString(),
+    })
 
-    if (existingUserMsg) {
-      console.log('[Chat] 用户消息已存在，跳过插入:', existingUserMsg.id)
+    if (msgError) {
+      // 唯一约束冲突（并发插入）可忽略
+      if (msgError.code === '23505') {
+        console.warn('[Chat] 用户消息可能已存在:', msgError.message)
+        return
+      }
+      console.error('[Chat] 保存用户消息失败:', msgError)
+      throw msgError
+    }
+
+    console.log('[Chat] 用户消息已保存:', conversationId)
+  } catch (err) {
+    console.error('[Chat] 保存用户消息异常:', err)
+    throw err
+  }
+}
+
+// ==================== 保存助手回复到数据库 ====================
+/**
+ * 保存助手回复（在 AI 响应完成后）
+ */
+async function saveAssistantReply({
+  conversationId,
+  userIdentifier,
+  assistantAnswer,
+}: {
+  conversationId: string
+  userIdentifier: string
+  assistantAnswer: string
+}) {
+  try {
+    if (!assistantAnswer) {
+      console.warn('[Chat] 助手回复为空，跳过保存')
       return
     }
 
-    // 3. 插入用户消息和助手回复
-    const { error: msgError } = await supabase.from('chat_messages').insert([
-      {
-        conversation_id: conversationId,
-        role: 'user',
-        content: userMessage,
-        user_id: userIdentifier,
-        created_at: userMessageTimeStr,
-      },
-      {
-        conversation_id: conversationId,
-        role: 'assistant',
-        content: assistantAnswer,
-        user_id: userIdentifier,
-        created_at: assistantMessageTimeStr,
-      },
-    ])
+    const now = new Date()
+
+    // 更新会话时间
+    await supabase
+      .from('chat_conversations')
+      .update({ updated_at: now.toISOString() })
+      .eq('id', conversationId)
+
+    // 插入助手回复
+    const { error: msgError } = await supabase.from('chat_messages').insert({
+      conversation_id: conversationId,
+      role: 'assistant',
+      content: assistantAnswer,
+      user_id: userIdentifier,
+      created_at: now.toISOString(),
+    })
 
     if (msgError) {
-      // 唯一约束冲突（并发插入）
+      // 唯一约束冲突可忽略
       if (msgError.code === '23505') {
-        console.warn('[Chat] 消息可能已存在（并发插入）:', msgError.message)
+        console.warn('[Chat] 助手回复可能已存在:', msgError.message)
         return
       }
-      console.error('[Chat] 保存消息失败:', msgError)
+      console.error('[Chat] 保存助手回复失败:', msgError)
       throw msgError
     }
+
+    console.log('[Chat] 助手回复已保存:', conversationId)
   } catch (err) {
-    console.error('[Chat] 保存对话历史异常:', err)
+    console.error('[Chat] 保存助手回复异常:', err)
   }
 }
