@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useLayoutEffect, useState, useRef, Suspense, useCallback } from 'react'
+import { useEffect, useLayoutEffect, useState, useRef, Suspense, useCallback, useMemo } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Assistant, Message, Conversation } from '@/lib/types'
 import ReactMarkdown from 'react-markdown'
@@ -18,6 +18,12 @@ import {
   Square,
   History
 } from 'lucide-react'
+import ConversationItem from '@/components/ConversationItem'
+import MessageItem from '@/components/MessageItem'
+import ConversationSkeleton from '@/components/ConversationSkeleton'
+import { useThrottle } from '@/lib/hooks/useThrottle'
+import { RequestDeduplicator } from '@/lib/utils/performance'
+import { PerformanceConfig, measurePerformance } from '@/lib/config/performance'
 
 // ==================== 类型定义 ====================
 
@@ -88,7 +94,7 @@ const sortConversationsWithTemp = (
   return [...temps, ...normals]
 }
 
-const CONVERSATION_CACHE_TTL = 5 * 60 * 1000 // 5分钟
+const CONVERSATION_CACHE_TTL = PerformanceConfig.cache.conversationTTL
 
 const markdownComponents: Components = {
   code({ inline, className, children, ...props }: any) {
@@ -175,11 +181,23 @@ function ChatPageContent() {
   const menuRefs = useRef<Map<string, HTMLElement>>(new Map())
   const autoFocusLatestConversationRef = useRef<string | null>(null)
   
+  // ==================== 性能优化 - useMemo ====================
+  // 缓存当前助手，避免重复计算
+  const currentAssistantMemo = useMemo(() => currentAssistant, [currentAssistant?.id])
+  
+  // 缓存是否有活跃流
+  const hasActiveStream = useMemo(() => 
+    activeStreamsRef.current.has(currentConversationId),
+    [currentConversationId, loading, assistantTyping]
+  )
+  
   // ==================== 全局会话状态管理 ====================
   /** 存储所有对话的状态（消息、输出状态等） */
   const conversationStatesRef = useRef<Map<string, ConversationState>>(new Map())
   /** 存储所有活跃的流请求 */
   const activeStreamsRef = useRef<Map<string, ActiveStream>>(new Map())
+  /** 请求去重器 - 防止重复请求 */
+  const requestDeduplicatorRef = useRef(new RequestDeduplicator())
   
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -425,41 +443,53 @@ function ChatPageContent() {
 
   const fetchConversations = async (assistant: Assistant, showLoading = false): Promise<Conversation[] | null> => {
     if (!user?.id) return null
-    try {
-      if (showLoading) setConversationsLoading(true)
-      const response = await fetch('/api/dify/conversations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ assistantId: assistant.id, userId: user?.id }),
-      })
-      const data = await response.json()
-      if (response.ok && data.conversations) {
-        const normalized: Conversation[] = data.conversations
-          .map(normalizeConversation)
-          .filter((item: Conversation) => Boolean(item.id))
-        let nextList: Conversation[] = []
-        setConversations((prev) => {
-          const temps = prev.filter((item) => isTemporaryConversation(item.id))
-          const combined = [...temps, ...normalized]
-          const dedupedMap = new Map<string, Conversation>()
-          combined.forEach((conv) => {
-            if (!conv.id) return
-            dedupedMap.set(conv.id, conv)
+    
+    // 使用请求去重器，防止重复请求
+    return requestDeduplicatorRef.current.dedupe(
+      `conversations_${assistant.id}_${user.id}`,
+      () => measurePerformance(`加载对话列表[${assistant.name}]`, async () => {
+        try {
+          if (showLoading) setConversationsLoading(true)
+          const response = await fetch('/api/dify/conversations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ assistantId: assistant.id, userId: user?.id }),
           })
-          nextList = sortConversationsWithTemp(Array.from(dedupedMap.values()), isTemporaryConversation)
-          return nextList
-        })
-        const cacheable = nextList.filter((item) => !isTemporaryConversation(item.id))
-        saveConversationCache(assistant.id, cacheable)
-        return nextList
-      }
-      return null
-    } catch (error) {
-      console.error('获取对话列表失败:', error)
-      return null
-    } finally {
-      if (showLoading) setConversationsLoading(false)
-    }
+          const data = await response.json()
+          if (response.ok && data.conversations) {
+            const normalized: Conversation[] = data.conversations
+              .map(normalizeConversation)
+              .filter((item: Conversation) => Boolean(item.id))
+            let nextList: Conversation[] = []
+            setConversations((prev) => {
+              const temps = prev.filter((item) => isTemporaryConversation(item.id))
+              const combined = [...temps, ...normalized]
+              const dedupedMap = new Map<string, Conversation>()
+              combined.forEach((conv) => {
+                if (!conv.id) return
+                dedupedMap.set(conv.id, conv)
+              })
+              nextList = sortConversationsWithTemp(Array.from(dedupedMap.values()), isTemporaryConversation)
+              
+              // 优化：只在实际变化时更新
+              if (JSON.stringify(prev) === JSON.stringify(nextList)) {
+                return prev
+              }
+              return nextList
+            })
+            const cacheable = nextList.filter((item) => !isTemporaryConversation(item.id))
+            saveConversationCache(assistant.id, cacheable)
+            return nextList
+          }
+          return null
+        } catch (error) {
+          console.error('获取对话列表失败:', error)
+          return null
+        } finally {
+          if (showLoading) setConversationsLoading(false)
+        }
+      })
+    )
   }
 
   const fetchConversationMessages = async (
@@ -469,46 +499,55 @@ function ChatPageContent() {
     scrollSnapshot?: { height: number; top: number },
   ) => {
     if (!currentAssistant) return
-    try {
-      const response = await fetch('/api/dify/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          conversationId,
-          userId: user?.id,
-          cursorRounds,
-          rounds: 5,
-        }),
-      })
+    
+    // 使用请求去重器，防止重复加载相同消息
+    return requestDeduplicatorRef.current.dedupe(
+      `messages_${conversationId}_${cursorRounds}_${mode}`,
+      () => measurePerformance(`加载消息[${conversationId.slice(0, 8)}][轮次:${cursorRounds}]`, async () => {
+        try {
+          const response = await fetch('/api/dify/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              conversationId,
+              userId: user?.id,
+              cursorRounds,
+              rounds: 5,
+            }),
+          })
 
-      const data = await response.json()
-      if (response.ok && data.messages) {
-        const normalized = sortMessages(data.messages.map(normalizeMessage))
-        if (currentConversationIdRef.current === conversationId) {
-          if (mode === 'prepend') {
-            setMessages(prev => {
-              const existingIds = new Set(prev.map(m => m.id))
-              const newMessages = normalized.filter(m => !existingIds.has(m.id))
-              return sortMessages([...newMessages, ...prev])
-            })
-            if (scrollSnapshot) {
-              requestAnimationFrame(() => {
-                const container = messagesContainerRef.current
-                if (!container) return
-                const diff = container.scrollHeight - scrollSnapshot.height
-                container.scrollTop = scrollSnapshot.top + diff
-              })
+          const data = await response.json()
+          if (response.ok && data.messages) {
+            const normalized = sortMessages(data.messages.map(normalizeMessage))
+            if (currentConversationIdRef.current === conversationId) {
+              if (mode === 'prepend') {
+                setMessages(prev => {
+                  const existingIds = new Set(prev.map(m => m.id))
+                  const newMessages = normalized.filter(m => !existingIds.has(m.id))
+                  // 优化：如果没有新消息，不更新状态
+                  if (newMessages.length === 0) return prev
+                  return sortMessages([...newMessages, ...prev])
+                })
+                if (scrollSnapshot) {
+                  requestAnimationFrame(() => {
+                    const container = messagesContainerRef.current
+                    if (!container) return
+                    const diff = container.scrollHeight - scrollSnapshot.height
+                    container.scrollTop = scrollSnapshot.top + diff
+                  })
+                }
+              } else {
+                setMessages(normalized)
+                requestScrollToBottom('instant')
+              }
+              setCurrentCursorRounds(data.nextCursorRounds ?? null)
             }
-          } else {
-            setMessages(normalized)
-            requestScrollToBottom('instant')
           }
-          setCurrentCursorRounds(data.nextCursorRounds ?? null)
+        } catch (error) {
+          console.error('获取对话历史失败:', error)
         }
-      }
-    } catch (error) {
-      console.error('获取对话历史失败:', error)
-    }
+      })
+    )
   }
 
   // ==================== 加载对话（优先恢复状态） ====================
@@ -990,29 +1029,27 @@ function ChatPageContent() {
     }
   }
 
-  const handleMessagesScroll = () => {
+  // 使用节流优化滚动处理
+  const handleMessagesScrollThrottled = useThrottle(() => {
     const container = messagesContainerRef.current
     if (!container || !currentConversationId || isTemporaryConversation(currentConversationId)) {
       setShowLoadMoreHint(false)
       return
     }
-    if (currentCursorRounds != null && container.scrollTop <= 100) {
+    if (currentCursorRounds != null && container.scrollTop <= PerformanceConfig.ui.loadMoreThreshold) {
       setShowLoadMoreHint(true)
-      if (container.scrollTop <= 40 && !loadingMoreRef.current) {
+      if (container.scrollTop <= PerformanceConfig.ui.autoLoadThreshold && !loadingMoreRef.current) {
         loadMoreMessages()
       }
     } else {
       setShowLoadMoreHint(false)
     }
-  }
+  }, PerformanceConfig.throttle.scroll)
 
   const handleLogout = () => {
     localStorage.removeItem('user')
     router.push('/')
   }
-
-  // 检查当前对话是否有活跃的流
-  const hasActiveStream = activeStreamsRef.current.has(currentConversationId)
 
   return (
     <div className="flex h-[100dvh] bg-gray-50 overflow-hidden font-sans text-gray-900">
@@ -1263,7 +1300,7 @@ function ChatPageContent() {
         {/* Messages */}
         <div 
           ref={messagesContainerRef}
-          onScroll={handleMessagesScroll}
+          onScroll={handleMessagesScrollThrottled}
           className="flex-1 overflow-y-auto p-4 md:p-8"
         >
           {!currentAssistant ? (
@@ -1307,34 +1344,7 @@ function ChatPageContent() {
                )}
                
                {messages.map((msg, index) => (
-                 <div 
-                   key={msg.id} 
-                   className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} group animate-fade-in`}
-                 >
-                   <div className={`
-                     relative max-w-[90%] md:max-w-[85%] rounded-2xl px-5 py-3.5 shadow-sm text-base leading-relaxed
-                     ${msg.role === 'user' 
-                       ? 'bg-blue-600 text-white rounded-br-sm shadow-blue-500/20' 
-                       : 'bg-white text-gray-800 border border-gray-100 rounded-bl-sm'}
-                   `}>
-                     {msg.role === 'assistant' ? (
-                       <div className="markdown-body">
-                         <ReactMarkdown 
-                            remarkPlugins={[remarkGfm]}
-                            components={markdownComponents}
-                         >
-                           {msg.content}
-                         </ReactMarkdown>
-                         {/* Actions Toolbar */}
-                         <div className="flex items-center space-x-2 mt-2 pt-2 border-t border-gray-50 opacity-0 group-hover:opacity-100 transition-opacity">
-                            {/* Actions can be added here like Copy, Retry */}
-                         </div>
-                       </div>
-                     ) : (
-                       <div className="whitespace-pre-wrap">{msg.content}</div>
-                     )}
-                   </div>
-                 </div>
+                 <MessageItem key={msg.id} message={msg} index={index} />
                ))}
                
                {assistantTyping && (
