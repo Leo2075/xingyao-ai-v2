@@ -829,16 +829,11 @@ function ChatPageContent() {
                   `}
                   title={assistant.name}
                 >
-                  <div className={`
-                    relative w-10 h-10 rounded-lg flex items-center justify-center transition-all duration-300 overflow-hidden
-                    ${isActive ? 'bg-white/20' : 'bg-slate-100 group-hover:bg-white'}
-                  `}>
-                    <img 
-                      src={`/icons/${iconName}.png`} 
-                      alt={assistant.name}
-                      className="w-6 h-6 object-contain"
-                    />
-                  </div>
+                  <img 
+                    src={`/icons/${iconName}.png`} 
+                    alt={assistant.name}
+                    className="w-10 h-10 min-w-[40px] min-h-[40px] rounded-xl object-cover flex-shrink-0"
+                  />
                   {!leftSidebarCollapsed && (
                     <span className="relative text-sm font-medium truncate flex-1 text-left animate-fade-in">
                       {assistant.name}

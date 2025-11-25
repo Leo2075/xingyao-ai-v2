@@ -117,13 +117,11 @@ export default function AssistantsPage() {
                 <div className="absolute top-0 right-0 w-32 h-32 bg-blue-50 rounded-bl-full -mr-16 -mt-16 transition-transform group-hover:scale-110 opacity-50" />
                 
                 <div className="relative z-10">
-                  <div className="w-14 h-14 bg-white rounded-xl shadow-sm border border-gray-100 flex items-center justify-center mb-5 group-hover:border-primary/20 group-hover:bg-primary/5 transition-colors">
-                    <img 
-                      src={`/icons/${iconName}.png`}
-                      alt={assistant.name}
-                      className="w-8 h-8 object-contain"
-                    />
-                  </div>
+                  <img 
+                    src={`/icons/${iconName}.png`}
+                    alt={assistant.name}
+                    className="w-14 h-14 rounded-2xl shadow-sm mb-5 object-cover"
+                  />
                   
                   <h3 className="text-xl font-bold text-gray-900 mb-2 group-hover:text-primary transition-colors">
                     {assistant.name}
