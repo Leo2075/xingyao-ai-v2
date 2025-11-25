@@ -312,23 +312,37 @@ function ChatPageContent() {
     // 乐观更新：优先显示缓存（即使过期），后台静默刷新
     const cached = getCachedConversations(assistant.id, true) // ignoreExpiry = true
     if (cached && cached.length > 0) {
+      const sortedCached = sortConversationsWithTemp(cached, isTemporaryConversation)
       setConversations(prev => {
         const temps = prev.filter(c => isTemporaryConversation(c.id))
-        const merged = sortConversationsWithTemp([...temps, ...cached], isTemporaryConversation)
-        return merged
+        return sortConversationsWithTemp([...temps, ...sortedCached], isTemporaryConversation)
       })
       setConversationsLoading(false)
+      
+      // 自动加载最新的历史对话（第一个非临时对话）
+      const firstRealConversation = sortedCached.find(c => !isTemporaryConversation(c.id))
+      if (firstRealConversation) {
+        loadConversation(firstRealConversation.id, true) // skipAssistantCheck = true
+      }
+      
       // 后台静默刷新，不显示 loading
       fetchConversations(assistant, false)
     } else {
       setConversations(prev => prev.filter(c => isTemporaryConversation(c.id)))
       setConversationsLoading(true)
-      await fetchConversations(assistant, true)
+      // 获取对话列表并自动加载最新对话
+      const conversations = await fetchConversations(assistant, true)
+      if (conversations && conversations.length > 0) {
+        const firstRealConversation = conversations.find(c => !isTemporaryConversation(c.id))
+        if (firstRealConversation) {
+          loadConversation(firstRealConversation.id, true) // skipAssistantCheck = true
+        }
+      }
     }
   }
 
-  const fetchConversations = async (assistant: Assistant, showLoading = false) => {
-    if (!user?.id) return
+  const fetchConversations = async (assistant: Assistant, showLoading = false): Promise<Conversation[] | null> => {
+    if (!user?.id) return null
     try {
       if (showLoading) setConversationsLoading(true)
       const response = await fetch('/api/dify/conversations', {
@@ -355,9 +369,12 @@ function ChatPageContent() {
         })
         const cacheable = nextList.filter((item) => !isTemporaryConversation(item.id))
         saveConversationCache(assistant.id, cacheable)
+        return nextList
       }
+      return null
     } catch (error) {
       console.error('获取对话列表失败:', error)
+      return null
     } finally {
       if (showLoading) setConversationsLoading(false)
     }
@@ -413,9 +430,10 @@ function ChatPageContent() {
     }
   }
 
-  const loadConversation = async (conversationId: string) => {
+  const loadConversation = async (conversationId: string, skipAssistantCheck = false) => {
     activeStreamRef.current = null
-    if (!currentAssistant) return
+    // skipAssistantCheck 用于从 selectAssistant 调用时跳过检查（此时 state 可能还未更新）
+    if (!skipAssistantCheck && !currentAssistant) return
     setCurrentConversationId(conversationId)
     currentConversationIdRef.current = conversationId
     setMessages([])
