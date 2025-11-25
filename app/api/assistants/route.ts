@@ -5,6 +5,10 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 
+// 禁用缓存，确保每次都获取最新数据
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
 export async function GET() {
   try {
     const { data: assistants, error } = await supabase
@@ -21,7 +25,16 @@ export async function GET() {
       )
     }
 
-    return NextResponse.json({ assistants: assistants || [] })
+    // 返回时添加禁用缓存的头
+    return NextResponse.json(
+      { assistants: assistants || [] },
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
+          'Pragma': 'no-cache',
+        }
+      }
+    )
   } catch (error) {
     console.error('获取助手列表错误:', error)
     return NextResponse.json(
