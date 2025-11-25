@@ -52,9 +52,33 @@ export async function POST(request: NextRequest) {
     let aggregatedAnswer = ''
     let conversationName = ''
     let isAborted = false
+    let isClosed = false  // 跟踪控制器状态
 
     const stream = new ReadableStream({
       async start(controller) {
+        // 安全的 enqueue 方法
+        const safeEnqueue = (data: Uint8Array) => {
+          if (!isClosed && !isAborted) {
+            try {
+              controller.enqueue(data)
+            } catch (e) {
+              console.warn('Enqueue failed (controller may be closed):', e)
+            }
+          }
+        }
+
+        // 安全的 close 方法
+        const safeClose = () => {
+          if (!isClosed) {
+            isClosed = true
+            try {
+              controller.close()
+            } catch (e) {
+              console.warn('Close failed (controller may already be closed):', e)
+            }
+          }
+        }
+
         try {
           for await (const chunk of aiService.sendMessage(
             message,
@@ -62,8 +86,8 @@ export async function POST(request: NextRequest) {
             userId,
             inputs
           )) {
-            if (isAborted) {
-              controller.close()
+            if (isAborted || isClosed) {
+              safeClose()
               return
             }
 
@@ -75,7 +99,7 @@ export async function POST(request: NextRequest) {
                 event: 'message',
                 answer: chunk.content,
               })
-              controller.enqueue(encoder.encode(`data: ${data}\n\n`))
+              safeEnqueue(encoder.encode(`data: ${data}\n\n`))
             }
 
             if (chunk.isComplete) {
@@ -92,8 +116,8 @@ export async function POST(request: NextRequest) {
                 conversationName = generateConversationName(message)
               }
 
-              // 保存到数据库
-              await persistMessages({
+              // 保存到数据库（不阻塞响应）
+              persistMessages({
                 conversationId: resolvedConversationId,
                 userIdentifier,
                 assistantId,
@@ -101,7 +125,7 @@ export async function POST(request: NextRequest) {
                 assistantAnswer: aggregatedAnswer,
                 userMessageTimestamp,
                 conversationName: conversationName || undefined,
-              })
+              }).catch(err => console.error('保存消息失败:', err))
 
               // 发送结束事件
               const endData = JSON.stringify({
@@ -109,10 +133,14 @@ export async function POST(request: NextRequest) {
                 conversation_id: resolvedConversationId,
                 conversation_name: conversationName || '新的对话',
               })
-              controller.enqueue(encoder.encode(`data: ${endData}\n\n`))
-              controller.close()
+              safeEnqueue(encoder.encode(`data: ${endData}\n\n`))
+              safeClose()
+              return  // 确保退出循环
             }
           }
+          
+          // 如果循环正常结束但没有收到 isComplete，也要关闭
+          safeClose()
         } catch (error: any) {
           console.error('Stream error:', error)
           
@@ -121,8 +149,8 @@ export async function POST(request: NextRequest) {
             event: 'error',
             message: error.message || 'AI服务暂时不可用',
           })
-          controller.enqueue(encoder.encode(`data: ${errorData}\n\n`))
-          controller.close()
+          safeEnqueue(encoder.encode(`data: ${errorData}\n\n`))
+          safeClose()
         }
       },
     })

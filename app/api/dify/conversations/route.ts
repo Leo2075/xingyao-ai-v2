@@ -44,7 +44,19 @@ export async function POST(request: NextRequest) {
 
     // 优化：合并本地和Dify数据
     if (localConversations && localConversations.length > 0) {
-      // 本地有数据，但可能不完整，尝试从Dify补充
+      // 中转站模式：只返回本地数据，不调用 Dify
+      if (assistant.api_mode === 'relay') {
+        return NextResponse.json({
+          conversations: localConversations.map(item => ({
+            id: item.id,
+            name: item.title || '新的对话',
+            created_at: item.created_at,
+            updated_at: item.updated_at,
+          }))
+        })
+      }
+
+      // Dify 模式：本地有数据，但可能不完整，尝试从Dify补充
       const difyData = await fetchFromDify({
         assistant,
         userIdentifier,
@@ -78,7 +90,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ conversations: merged })
     }
 
-    // 本地无数据，从Dify获取并同步
+    // 中转站模式：本地无数据，返回空列表
+    if (assistant.api_mode === 'relay') {
+      return NextResponse.json({ conversations: [] })
+    }
+
+    // Dify 模式：本地无数据，从Dify获取并同步
     const fallback = await fetchFromDify({
       assistant,
       userIdentifier,
