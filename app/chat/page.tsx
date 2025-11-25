@@ -181,16 +181,6 @@ function ChatPageContent() {
   const menuRefs = useRef<Map<string, HTMLElement>>(new Map())
   const autoFocusLatestConversationRef = useRef<string | null>(null)
   
-  // ==================== 性能优化 - useMemo ====================
-  // 缓存当前助手，避免重复计算
-  const currentAssistantMemo = useMemo(() => currentAssistant, [currentAssistant?.id])
-  
-  // 缓存是否有活跃流
-  const hasActiveStream = useMemo(() => 
-    activeStreamsRef.current.has(currentConversationId),
-    [currentConversationId, loading, assistantTyping]
-  )
-  
   // ==================== 全局会话状态管理 ====================
   /** 存储所有对话的状态（消息、输出状态等） */
   const conversationStatesRef = useRef<Map<string, ConversationState>>(new Map())
@@ -198,6 +188,13 @@ function ChatPageContent() {
   const activeStreamsRef = useRef<Map<string, ActiveStream>>(new Map())
   /** 请求去重器 - 防止重复请求 */
   const requestDeduplicatorRef = useRef(new RequestDeduplicator())
+  
+  // ==================== 性能优化 - useMemo ====================
+  // 缓存是否有活跃流
+  const hasActiveStream = useMemo(() => 
+    activeStreamsRef.current.has(currentConversationId),
+    [currentConversationId, loading, assistantTyping]
+  )
   
   const router = useRouter()
   const searchParams = useSearchParams()
