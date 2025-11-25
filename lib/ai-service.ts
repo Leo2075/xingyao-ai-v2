@@ -1,84 +1,34 @@
 // ============================================================
 // 星耀AI - AI 服务层
-// 支持 Dify 和 中转站 两种调用模式
+// 仅支持中转站模式（OpenAI/Claude 兼容格式）
 // ============================================================
 
 import { supabase } from './supabase'
-import { AssistantConfig, AIMessage, AIStreamChunk, DifyRequest, RelayRequest } from './ai-types'
+import { AssistantConfig, AIMessage, AIStreamChunk, RelayRequest } from './ai-types'
 
+/**
+ * AI 服务类
+ * 负责与中转站 API 通信，支持 OpenAI 和 Claude 两种格式
+ */
 export class AIService {
   constructor(private assistant: AssistantConfig) {}
 
   /**
    * 发送消息并返回流式响应
+   * @param userMessage 用户消息
+   * @param conversationId 对话ID（可选）
+   * @param userId 用户ID（可选）
    */
   async *sendMessage(
     userMessage: string,
     conversationId?: string,
-    userId?: string,
-    inputs?: Record<string, any>
-  ): AsyncGenerator<AIStreamChunk> {
-    if (this.assistant.api_mode === 'dify') {
-      yield* this.sendToDify(userMessage, conversationId, userId, inputs)
-    } else {
-      yield* this.sendToRelay(userMessage, conversationId, userId)
-    }
-  }
-
-  /**
-   * Dify 模式
-   */
-  private async *sendToDify(
-    userMessage: string,
-    conversationId?: string,
-    userId?: string,
-    inputs?: Record<string, any>
-  ): AsyncGenerator<AIStreamChunk> {
-    const url = `${this.assistant.dify_url}/chat-messages`
-    const userIdentifier = userId ? `user-${userId}` : 'user-anon'
-    
-    const body: DifyRequest = {
-      query: userMessage,
-      user: userIdentifier,
-      response_mode: 'streaming',
-      conversation_id: conversationId,
-      inputs: inputs || {},
-    }
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.assistant.dify_key}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => '')
-      console.error('Dify API error:', response.status, errorText)
-      throw new Error(`Dify API error: ${response.status}`)
-    }
-
-    if (!response.body) {
-      throw new Error('Dify response body is null')
-    }
-
-    yield* this.parseDifyStream(response.body)
-  }
-
-  /**
-   * 中转站模式（支持 OpenAI 和 Claude 格式）
-   */
-  private async *sendToRelay(
-    userMessage: string,
-    conversationId?: string,
     userId?: string
   ): AsyncGenerator<AIStreamChunk> {
-    // 1. 查询历史消息
+    // 1. 查询历史消息（用于上下文）
     const historyMessages = await this.getHistoryMessages(conversationId, userId)
 
     // 2. 检测 API 格式（根据 URL 判断）
+    // 包含 /messages 的是 Claude 格式，否则是 OpenAI 格式
     const isClaudeFormat = this.assistant.relay_url?.includes('/messages')
     
     // 3. 构造请求体
@@ -86,14 +36,14 @@ export class AIService {
     let headers: Record<string, string>
 
     if (isClaudeFormat) {
-      // Claude 格式
+      // Claude 格式：system 单独传递，不在 messages 数组中
       const messages = [
         ...historyMessages,
         { role: 'user' as const, content: userMessage },
       ]
 
       body = {
-        model: this.assistant.relay_model!,
+        model: this.assistant.relay_model,
         max_tokens: this.assistant.max_tokens ?? 2500,
         temperature: this.assistant.temperature ?? 0.8,
         stream: true,
@@ -102,13 +52,14 @@ export class AIService {
         ...(this.assistant.advanced_config || {}),
       }
 
+      // Claude 使用 x-api-key 认证
       headers = {
-        'x-api-key': this.assistant.relay_key!,
+        'x-api-key': this.assistant.relay_key,
         'anthropic-version': '2023-06-01',
         'Content-Type': 'application/json',
       }
     } else {
-      // OpenAI 格式
+      // OpenAI 格式：system 作为第一条消息
       const messages: AIMessage[] = [
         ...(this.assistant.system_prompt 
           ? [{ role: 'system' as const, content: this.assistant.system_prompt }] 
@@ -118,7 +69,7 @@ export class AIService {
       ]
 
       body = {
-        model: this.assistant.relay_model!,
+        model: this.assistant.relay_model,
         messages,
         temperature: this.assistant.temperature ?? 0.8,
         max_tokens: this.assistant.max_tokens ?? 2500,
@@ -129,6 +80,7 @@ export class AIService {
         ...(this.assistant.advanced_config || {}),
       }
 
+      // OpenAI 使用 Bearer Token 认证
       headers = {
         'Authorization': `Bearer ${this.assistant.relay_key}`,
         'Content-Type': 'application/json',
@@ -142,13 +94,14 @@ export class AIService {
     console.log(`[AIService] 温度: ${body.temperature}`)
     console.log(`[AIService] 最大Token: ${body.max_tokens}`)
     console.log(`[AIService] 历史消息数: ${historyMessages.length} 条`)
-    console.log(`[AIService] 总消息数: ${isClaudeFormat ? body.messages.length : body.messages.length} 条`)
+    console.log(`[AIService] 总消息数: ${body.messages.length} 条`)
     console.log(`[AIService] System Prompt: ${isClaudeFormat ? (body.system ? '有' : '无') : (body.messages[0]?.role === 'system' ? '有' : '无')}`)
     console.log('[AIService] 发送的消息内容:')
-    console.log(JSON.stringify(isClaudeFormat ? body.messages : body.messages, null, 2))
+    console.log(JSON.stringify(body.messages, null, 2))
     console.log('================================================')
 
-    const response = await fetch(this.assistant.relay_url!, {
+    // 4. 发送请求
+    const response = await fetch(this.assistant.relay_url, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
@@ -156,29 +109,33 @@ export class AIService {
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => '')
-      console.error('Relay API error:', response.status, errorText)
-      throw new Error(`Relay API error: ${response.status} - ${errorText}`)
+      console.error('[AIService] API 错误:', response.status, errorText)
+      throw new Error(`API 请求失败: ${response.status} - ${errorText}`)
     }
 
     if (!response.body) {
-      throw new Error('Relay response body is null')
+      throw new Error('响应体为空')
     }
 
-    // 根据格式选择解析器
+    // 5. 根据格式选择解析器
     if (isClaudeFormat) {
       yield* this.parseClaudeStream(response.body)
     } else {
-      yield* this.parseRelayStream(response.body)
+      yield* this.parseOpenAIStream(response.body)
     }
   }
 
   /**
-   * 查询历史消息（仅中转站模式使用）
+   * 查询历史消息（用于构建上下文）
+   * @param conversationId 对话ID
+   * @param userId 用户ID
+   * @returns 历史消息数组
    */
   private async getHistoryMessages(conversationId?: string, userId?: string): Promise<AIMessage[]> {
     if (!conversationId) return []
 
     const userIdentifier = userId ? `user-${userId}` : 'user-anon'
+    // 获取最近 N 条消息作为上下文
     const limit = this.assistant.context_window || 20
 
     const { data, error } = await supabase
@@ -190,7 +147,7 @@ export class AIService {
       .limit(limit)
 
     if (error) {
-      console.error('Failed to fetch history messages:', error)
+      console.error('[AIService] 获取历史消息失败:', error)
       return []
     }
 
@@ -199,71 +156,10 @@ export class AIService {
   }
 
   /**
-   * 解析 Dify 流式响应
+   * 解析 OpenAI 格式的流式响应
+   * 格式: data: {"choices":[{"delta":{"content":"xxx"}}]}
    */
-  private async *parseDifyStream(body: ReadableStream<Uint8Array>): AsyncGenerator<AIStreamChunk> {
-    const reader = body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          const data = line.slice(6).trim()
-          if (data === '[DONE]') continue
-
-          try {
-            const json = JSON.parse(data)
-            
-            if (json.event === 'message') {
-              yield {
-                content: json.answer || '',
-                isComplete: false,
-              }
-            }
-            
-            if (json.event === 'message_end') {
-              yield {
-                content: '',
-                isComplete: true,
-                metadata: {
-                  conversationId: json.conversation_id,
-                  conversationName: json.conversation_name,
-                },
-              }
-            }
-
-            // 处理错误事件
-            if (json.event === 'error') {
-              console.error('Dify error event:', json)
-              throw new Error(json.message || 'Dify error')
-            }
-          } catch (e) {
-            if (e instanceof SyntaxError) {
-              console.warn('Dify parse warning:', e.message, 'data:', data)
-            } else {
-              throw e
-            }
-          }
-        }
-      }
-    } finally {
-      reader.releaseLock()
-    }
-  }
-
-  /**
-   * 解析中转站流式响应（OpenAI 格式）
-   */
-  private async *parseRelayStream(body: ReadableStream<Uint8Array>): AsyncGenerator<AIStreamChunk> {
+  private async *parseOpenAIStream(body: ReadableStream<Uint8Array>): AsyncGenerator<AIStreamChunk> {
     const reader = body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
@@ -281,6 +177,7 @@ export class AIService {
           if (!line.startsWith('data: ')) continue
           const data = line.slice(6).trim()
           
+          // [DONE] 表示流结束
           if (data === '[DONE]') {
             yield { content: '', isComplete: true }
             continue
@@ -291,10 +188,11 @@ export class AIService {
             
             // 处理错误响应
             if (json.error) {
-              console.error('Relay error:', json.error)
-              throw new Error(json.error.message || 'Relay API error')
+              console.error('[AIService] OpenAI 错误:', json.error)
+              throw new Error(json.error.message || 'API 返回错误')
             }
 
+            // 提取内容和完成标志
             const content = json.choices?.[0]?.delta?.content || ''
             const finishReason = json.choices?.[0]?.finish_reason
             
@@ -302,13 +200,13 @@ export class AIService {
               yield { content, isComplete: false }
             }
 
-            // 检查是否完成
+            // finish_reason 为 stop 表示完成
             if (finishReason === 'stop') {
               yield { content: '', isComplete: true }
             }
           } catch (e) {
             if (e instanceof SyntaxError) {
-              console.warn('Relay parse warning:', e.message, 'data:', data)
+              console.warn('[AIService] 解析警告:', e.message)
             } else {
               throw e
             }
@@ -321,7 +219,8 @@ export class AIService {
   }
 
   /**
-   * 解析 Claude 流式响应
+   * 解析 Claude 格式的流式响应
+   * 格式: event: content_block_delta\ndata: {"delta":{"text":"xxx"}}
    */
   private async *parseClaudeStream(body: ReadableStream<Uint8Array>): AsyncGenerator<AIStreamChunk> {
     const reader = body.getReader()
@@ -338,7 +237,6 @@ export class AIService {
         buffer = lines.pop() || ''
 
         for (const line of lines) {
-          // Claude SSE 格式: event: xxx\ndata: {...}
           if (!line.startsWith('data: ')) continue
           const data = line.slice(6).trim()
           
@@ -349,8 +247,8 @@ export class AIService {
             
             // 处理错误
             if (json.type === 'error') {
-              console.error('Claude error:', json.error)
-              throw new Error(json.error?.message || 'Claude API error')
+              console.error('[AIService] Claude 错误:', json.error)
+              throw new Error(json.error?.message || 'Claude API 错误')
             }
 
             // content_block_delta 事件包含实际内容
@@ -372,7 +270,7 @@ export class AIService {
             }
           } catch (e) {
             if (e instanceof SyntaxError) {
-              console.warn('Claude parse warning:', e.message, 'data:', data)
+              console.warn('[AIService] 解析警告:', e.message)
             } else {
               throw e
             }
@@ -389,6 +287,8 @@ export class AIService {
 
 /**
  * 生成对话名称（取用户消息前 20 字）
+ * @param userMessage 用户消息
+ * @returns 对话名称
  */
 export function generateConversationName(userMessage: string): string {
   const cleaned = userMessage.replace(/\s+/g, ' ').trim()
@@ -398,8 +298,8 @@ export function generateConversationName(userMessage: string): string {
 
 /**
  * 生成新的对话 ID
+ * @returns UUID 格式的对话ID
  */
 export function generateConversationId(): string {
   return crypto.randomUUID()
 }
-

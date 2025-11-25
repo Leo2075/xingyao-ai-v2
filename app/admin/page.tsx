@@ -1,5 +1,10 @@
 'use client'
 
+// ============================================================
+// 星耀AI - 管理后台页面
+// 用于配置 AI 助手的中转站参数
+// ============================================================
+
 import { useState, useEffect } from 'react'
 import { useAdminAuth } from './auth-context'
 import { 
@@ -9,7 +14,6 @@ import {
   Check,
   AlertCircle,
   Zap,
-  Cloud,
   Settings,
   Plus,
   Trash2,
@@ -18,15 +22,13 @@ import {
   Save
 } from 'lucide-react'
 
+// 助手配置接口
 interface Assistant {
   id: string
   name: string
   description: string
   icon_name: string
   status: string
-  api_mode: 'dify' | 'relay'
-  dify_url?: string
-  dify_key?: string
   relay_url?: string
   relay_key?: string
   relay_model?: string
@@ -71,9 +73,6 @@ export default function AdminPage() {
     name: '',
     description: '',
     icon_name: 'brain',
-    api_mode: 'relay' as 'dify' | 'relay',
-    dify_url: '',
-    dify_key: '',
     relay_url: '',
     relay_key: '',
     relay_model: '',
@@ -88,6 +87,7 @@ export default function AdminPage() {
     fetchAssistants()
   }, [token])
 
+  // 获取助手列表
   const fetchAssistants = async () => {
     if (!token) return
     setLoading(true)
@@ -108,7 +108,7 @@ export default function AdminPage() {
     }
   }
 
-  // 更新助手
+  // 更新助手配置
   const updateAssistant = async (id: string, updates: Partial<Assistant>) => {
     if (!token) return
     setSaving(id)
@@ -138,11 +138,17 @@ export default function AdminPage() {
     }
   }
 
-  // 创建助手
+  // 创建新助手
   const createAssistant = async () => {
     if (!token) return
+    
+    // 表单验证
     if (!newAssistant.name) {
       showNotification('error', '请输入助手名称')
+      return
+    }
+    if (!newAssistant.relay_url || !newAssistant.relay_key || !newAssistant.relay_model) {
+      showNotification('error', '请填写完整的中转站配置')
       return
     }
 
@@ -161,13 +167,11 @@ export default function AdminPage() {
       if (response.ok) {
         setAssistants(prev => [...prev, data.assistant])
         setShowCreateModal(false)
+        // 重置表单
         setNewAssistant({
           name: '',
           description: '',
           icon_name: 'brain',
-          api_mode: 'relay',
-          dify_url: '',
-          dify_key: '',
           relay_url: '',
           relay_key: '',
           relay_model: '',
@@ -212,15 +216,18 @@ export default function AdminPage() {
     }
   }
 
+  // 切换密钥可见性
   const toggleKeyVisibility = (id: string) => {
     setShowKeys(prev => ({ ...prev, [id]: !prev[id] }))
   }
 
+  // 显示通知
   const showNotification = (type: 'success' | 'error', message: string) => {
     setNotification({ type, message })
     setTimeout(() => setNotification(null), 3000)
   }
 
+  // 加载中状态
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -248,7 +255,7 @@ export default function AdminPage() {
       <div className="flex justify-between items-center">
         <div>
           <h2 className="text-3xl font-bold text-gray-900">助手配置管理</h2>
-          <p className="text-gray-500 mt-1">管理 {assistants.length} 个 AI 助手的调用模式和参数</p>
+          <p className="text-gray-500 mt-1">管理 {assistants.length} 个 AI 助手的中转站配置</p>
         </div>
         <div className="flex items-center space-x-3">
           <button
@@ -281,174 +288,102 @@ export default function AdminPage() {
                 <div className="flex-1">
                   <div className="flex items-center space-x-3">
                     <h3 className="text-xl font-bold text-gray-900">{assistant.name}</h3>
-                    <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${
-                      assistant.api_mode === 'dify' 
-                        ? 'bg-blue-100 text-blue-700' 
-                        : 'bg-green-100 text-green-700'
-                    }`}>
-                      {assistant.api_mode === 'dify' ? 'Dify' : '中转站'}
+                    <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-700">
+                      中转站
                     </span>
                   </div>
                   <p className="text-gray-500 text-sm mt-1">{assistant.description}</p>
                 </div>
                 
-                {/* 模式切换按钮 */}
-                <div className="flex items-center space-x-2">
-                  <button
-                    onClick={() => updateAssistant(assistant.id, { api_mode: 'dify' })}
-                    className={`flex items-center space-x-2 px-4 py-2 rounded-xl font-medium transition-all ${
-                      assistant.api_mode === 'dify'
-                        ? 'bg-blue-600 text-white shadow-md'
-                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                    }`}
-                    disabled={saving === assistant.id}
-                  >
-                    <Cloud className="w-4 h-4" />
-                    <span>Dify</span>
-                  </button>
-                  
-                  <button
-                    onClick={() => updateAssistant(assistant.id, { api_mode: 'relay' })}
-                    className={`flex items-center space-x-2 px-4 py-2 rounded-xl font-medium transition-all ${
-                      assistant.api_mode === 'relay'
-                        ? 'bg-green-600 text-white shadow-md'
-                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                    }`}
-                    disabled={saving === assistant.id}
-                  >
-                    <Zap className="w-4 h-4" />
-                    <span>中转站</span>
-                  </button>
-
-                  <button
-                    onClick={() => setDeleteConfirm(assistant.id)}
-                    className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors ml-2"
-                    title="删除助手"
-                  >
-                    <Trash2 className="w-5 h-5" />
-                  </button>
-                </div>
+                {/* 删除按钮 */}
+                <button
+                  onClick={() => setDeleteConfirm(assistant.id)}
+                  className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                  title="删除助手"
+                >
+                  <Trash2 className="w-5 h-5" />
+                </button>
               </div>
             </div>
 
             {/* 配置区域 */}
             <div className="p-6 space-y-6">
-              {/* Dify 配置 */}
-              {assistant.api_mode === 'dify' && (
-                <div className="space-y-4 p-4 bg-blue-50 rounded-xl">
-                  <div className="flex items-center space-x-2 mb-2">
-                    <Cloud className="w-5 h-5 text-blue-600" />
-                    <h4 className="font-semibold text-blue-900">Dify 配置</h4>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Dify API URL
-                      </label>
-                      <input
-                        type="text"
-                        value={assistant.dify_url || ''}
-                        onChange={(e) => updateAssistant(assistant.id, { dify_url: e.target.value })}
-                        placeholder="https://api.dify.ai/v1"
-                        className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      />
-                    </div>
-                    
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Dify API Key
-                      </label>
-                      <div className="flex space-x-2">
-                        <input
-                          type={showKeys[assistant.id] ? 'text' : 'password'}
-                          value={assistant.dify_key || ''}
-                          onChange={(e) => updateAssistant(assistant.id, { dify_key: e.target.value })}
-                          placeholder="app-xxx"
-                          className="flex-1 px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                        />
-                        <button
-                          onClick={() => toggleKeyVisibility(assistant.id)}
-                          className="px-3 py-2 border border-gray-200 rounded-lg hover:bg-gray-50 text-gray-500"
-                        >
-                          {showKeys[assistant.id] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
               {/* 中转站配置 */}
-              {assistant.api_mode === 'relay' && (
-                <div className="space-y-4 p-4 bg-green-50 rounded-xl">
-                  <div className="flex items-center space-x-2 mb-2">
-                    <Zap className="w-5 h-5 text-green-600" />
-                    <h4 className="font-semibold text-green-900">中转站配置</h4>
+              <div className="space-y-4 p-4 bg-green-50 rounded-xl">
+                <div className="flex items-center space-x-2 mb-2">
+                  <Zap className="w-5 h-5 text-green-600" />
+                  <h4 className="font-semibold text-green-900">中转站配置</h4>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-4">
+                  {/* API URL */}
+                  <div className="col-span-2">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      中转站 API URL
+                    </label>
+                    <input
+                      type="text"
+                      value={assistant.relay_url || ''}
+                      onChange={(e) => updateAssistant(assistant.id, { relay_url: e.target.value })}
+                      placeholder="https://api.oneapi.com/v1/chat/completions"
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      提示：URL 包含 /messages 会使用 Claude 格式，否则使用 OpenAI 格式
+                    </p>
                   </div>
                   
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="col-span-2">
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        中转站 API URL
-                      </label>
+                  {/* API Key */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      API Key
+                    </label>
+                    <div className="flex space-x-2">
                       <input
-                        type="text"
-                        value={assistant.relay_url || ''}
-                        onChange={(e) => updateAssistant(assistant.id, { relay_url: e.target.value })}
-                        placeholder="https://api.oneapi.com/v1/chat/completions"
-                        className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                        type={showKeys[assistant.id] ? 'text' : 'password'}
+                        value={assistant.relay_key || ''}
+                        onChange={(e) => updateAssistant(assistant.id, { relay_key: e.target.value })}
+                        placeholder="sk-xxx"
+                        className="flex-1 px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
                       />
-                    </div>
-                    
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        API Key
-                      </label>
-                      <div className="flex space-x-2">
-                        <input
-                          type={showKeys[assistant.id] ? 'text' : 'password'}
-                          value={assistant.relay_key || ''}
-                          onChange={(e) => updateAssistant(assistant.id, { relay_key: e.target.value })}
-                          placeholder="sk-xxx"
-                          className="flex-1 px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
-                        />
-                        <button
-                          onClick={() => toggleKeyVisibility(assistant.id)}
-                          className="px-3 py-2 border border-gray-200 rounded-lg hover:bg-gray-50 text-gray-500"
-                        >
-                          {showKeys[assistant.id] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </button>
-                      </div>
-                    </div>
-                    
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        模型名称
-                      </label>
-                      <input
-                        type="text"
-                        value={assistant.relay_model || ''}
-                        onChange={(e) => updateAssistant(assistant.id, { relay_model: e.target.value })}
-                        placeholder="claude-haiku-4-5-20251001"
-                        className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
-                      />
-                    </div>
-                    
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        历史消息数
-                      </label>
-                      <input
-                        type="number"
-                        value={assistant.context_window || 20}
-                        onChange={(e) => updateAssistant(assistant.id, { context_window: parseInt(e.target.value) || 20 })}
-                        className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
-                      />
+                      <button
+                        onClick={() => toggleKeyVisibility(assistant.id)}
+                        className="px-3 py-2 border border-gray-200 rounded-lg hover:bg-gray-50 text-gray-500"
+                      >
+                        {showKeys[assistant.id] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
                     </div>
                   </div>
+                  
+                  {/* 模型名称 */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      模型名称
+                    </label>
+                    <input
+                      type="text"
+                      value={assistant.relay_model || ''}
+                      onChange={(e) => updateAssistant(assistant.id, { relay_model: e.target.value })}
+                      placeholder="claude-haiku-4-5-20251001"
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                    />
+                  </div>
+                  
+                  {/* 历史消息数 */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      历史消息数
+                    </label>
+                    <input
+                      type="number"
+                      value={assistant.context_window || 20}
+                      onChange={(e) => updateAssistant(assistant.id, { context_window: parseInt(e.target.value) || 20 })}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">发送给大模型的历史消息条数</p>
+                  </div>
                 </div>
-              )}
+              </div>
 
               {/* 高级参数（可折叠） */}
               <div>
@@ -567,6 +502,7 @@ export default function AdminPage() {
           </div>
         ))}
 
+        {/* 空状态 */}
         {assistants.length === 0 && (
           <div className="text-center py-16 bg-white rounded-2xl border border-gray-100">
             <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
@@ -627,114 +563,54 @@ export default function AdminPage() {
                 />
               </div>
 
-              {/* 调用模式 */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  调用模式 <span className="text-red-500">*</span>
-                </label>
-                <div className="flex space-x-3">
-                  <button
-                    onClick={() => setNewAssistant({ ...newAssistant, api_mode: 'dify' })}
-                    className={`flex-1 flex items-center justify-center space-x-2 px-4 py-3 rounded-xl font-medium transition-all ${
-                      newAssistant.api_mode === 'dify'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                    }`}
-                  >
-                    <Cloud className="w-5 h-5" />
-                    <span>Dify 模式</span>
-                  </button>
-                  <button
-                    onClick={() => setNewAssistant({ ...newAssistant, api_mode: 'relay' })}
-                    className={`flex-1 flex items-center justify-center space-x-2 px-4 py-3 rounded-xl font-medium transition-all ${
-                      newAssistant.api_mode === 'relay'
-                        ? 'bg-green-600 text-white'
-                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                    }`}
-                  >
-                    <Zap className="w-5 h-5" />
-                    <span>中转站模式</span>
-                  </button>
+              {/* 中转站配置 */}
+              <div className="space-y-4 p-4 bg-green-50 rounded-xl">
+                <div className="flex items-center space-x-2">
+                  <Zap className="w-5 h-5 text-green-600" />
+                  <h4 className="font-medium text-green-900">中转站配置</h4>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="col-span-2">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      中转站 URL <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={newAssistant.relay_url}
+                      onChange={(e) => setNewAssistant({ ...newAssistant, relay_url: e.target.value })}
+                      placeholder="https://api.oneapi.com/v1/chat/completions"
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      OpenAI 格式用 /chat/completions，Claude 格式用 /messages
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      API Key <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="password"
+                      value={newAssistant.relay_key}
+                      onChange={(e) => setNewAssistant({ ...newAssistant, relay_key: e.target.value })}
+                      placeholder="sk-xxx"
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      模型名称 <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={newAssistant.relay_model}
+                      onChange={(e) => setNewAssistant({ ...newAssistant, relay_model: e.target.value })}
+                      placeholder="claude-haiku-4-5-20251001"
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg"
+                    />
+                  </div>
                 </div>
               </div>
-
-              {/* Dify 配置 */}
-              {newAssistant.api_mode === 'dify' && (
-                <div className="space-y-4 p-4 bg-blue-50 rounded-xl">
-                  <h4 className="font-medium text-blue-900">Dify 配置</h4>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Dify URL <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={newAssistant.dify_url}
-                        onChange={(e) => setNewAssistant({ ...newAssistant, dify_url: e.target.value })}
-                        placeholder="https://api.dify.ai/v1"
-                        className="w-full px-3 py-2 border border-gray-200 rounded-lg"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Dify Key <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="password"
-                        value={newAssistant.dify_key}
-                        onChange={(e) => setNewAssistant({ ...newAssistant, dify_key: e.target.value })}
-                        placeholder="app-xxx"
-                        className="w-full px-3 py-2 border border-gray-200 rounded-lg"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* 中转站配置 */}
-              {newAssistant.api_mode === 'relay' && (
-                <div className="space-y-4 p-4 bg-green-50 rounded-xl">
-                  <h4 className="font-medium text-green-900">中转站配置</h4>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="col-span-2">
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        中转站 URL <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={newAssistant.relay_url}
-                        onChange={(e) => setNewAssistant({ ...newAssistant, relay_url: e.target.value })}
-                        placeholder="https://api.oneapi.com/v1/chat/completions"
-                        className="w-full px-3 py-2 border border-gray-200 rounded-lg"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        API Key <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="password"
-                        value={newAssistant.relay_key}
-                        onChange={(e) => setNewAssistant({ ...newAssistant, relay_key: e.target.value })}
-                        placeholder="sk-xxx"
-                        className="w-full px-3 py-2 border border-gray-200 rounded-lg"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        模型名称 <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={newAssistant.relay_model}
-                        onChange={(e) => setNewAssistant({ ...newAssistant, relay_model: e.target.value })}
-                        placeholder="claude-haiku-4-5-20251001"
-                        className="w-full px-3 py-2 border border-gray-200 rounded-lg"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
 
               {/* 系统提示词 */}
               <div>
@@ -844,4 +720,3 @@ export default function AdminPage() {
     </div>
   )
 }
-

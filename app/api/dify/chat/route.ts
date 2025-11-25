@@ -1,6 +1,6 @@
 // ============================================================
 // 星耀AI - 聊天 API
-// 支持 Dify 和 中转站 两种调用模式
+// 通过中转站调用大模型，支持 OpenAI/Claude 格式
 // ============================================================
 
 import { NextRequest } from 'next/server'
@@ -10,8 +10,9 @@ import { AssistantConfig } from '@/lib/ai-types'
 
 export async function POST(request: NextRequest) {
   try {
-    const { assistantId, message, conversationId, userId, inputs } = await request.json()
+    const { assistantId, message, conversationId, userId } = await request.json()
 
+    // 参数校验
     if (!assistantId || !message) {
       return new Response(
         JSON.stringify({ error: '缺少必要参数' }),
@@ -38,63 +39,64 @@ export async function POST(request: NextRequest) {
     const userIdentifier = userId ? `user-${userId}` : 'user-anon'
     const userMessageTimestamp = new Date()
 
-    // 3. 确定对话 ID（中转站模式需要预先生成）
+    // 3. 确定对话 ID（新对话需要预先生成 UUID）
     let resolvedConversationId = conversationId || ''
     const isNewConversation = !conversationId || conversationId.startsWith('temp-')
     
-    // 中转站模式下，如果是新对话，预先生成 UUID
-    if (assistant.api_mode === 'relay' && isNewConversation) {
+    if (isNewConversation) {
       resolvedConversationId = generateConversationId()
     }
 
-    // 4. 流式返回
+    // 4. 创建流式响应
     const encoder = new TextEncoder()
     let aggregatedAnswer = ''
     let conversationName = ''
     let isAborted = false
-    let isClosed = false  // 跟踪控制器状态
+    let isClosed = false  // 跟踪控制器状态，防止重复关闭
 
     const stream = new ReadableStream({
       async start(controller) {
-        // 安全的 enqueue 方法
+        // 安全的写入方法（防止写入已关闭的控制器）
         const safeEnqueue = (data: Uint8Array) => {
           if (!isClosed && !isAborted) {
             try {
               controller.enqueue(data)
             } catch (e) {
-              console.warn('Enqueue failed (controller may be closed):', e)
+              console.warn('[Chat] 写入失败（控制器可能已关闭）:', e)
             }
           }
         }
 
-        // 安全的 close 方法
+        // 安全的关闭方法（防止重复关闭）
         const safeClose = () => {
           if (!isClosed) {
             isClosed = true
             try {
               controller.close()
             } catch (e) {
-              console.warn('Close failed (controller may already be closed):', e)
+              console.warn('[Chat] 关闭失败（控制器可能已关闭）:', e)
             }
           }
         }
 
         try {
+          // 调用 AI 服务获取流式响应
           for await (const chunk of aiService.sendMessage(
             message,
-            assistant.api_mode === 'dify' ? conversationId : resolvedConversationId,
-            userId,
-            inputs
+            resolvedConversationId,
+            userId
           )) {
+            // 检查是否已中断
             if (isAborted || isClosed) {
               safeClose()
               return
             }
 
+            // 处理内容块
             if (chunk.content) {
               aggregatedAnswer += chunk.content
               
-              // 转换为前端期望的格式（保持兼容）
+              // 转换为 SSE 格式发送给前端
               const data = JSON.stringify({
                 event: 'message',
                 answer: chunk.content,
@@ -102,21 +104,14 @@ export async function POST(request: NextRequest) {
               safeEnqueue(encoder.encode(`data: ${data}\n\n`))
             }
 
+            // 处理完成信号
             if (chunk.isComplete) {
-              // Dify 模式：从返回值获取 conversation_id
-              if (chunk.metadata?.conversationId) {
-                resolvedConversationId = chunk.metadata.conversationId
-              }
-              if (chunk.metadata?.conversationName) {
-                conversationName = chunk.metadata.conversationName
-              }
-
-              // 中转站模式：生成对话名称
-              if (assistant.api_mode === 'relay' && !conversationName) {
+              // 生成对话名称（取用户消息前20字）
+              if (!conversationName) {
                 conversationName = generateConversationName(message)
               }
 
-              // 保存到数据库（不阻塞响应）
+              // 保存到数据库（异步，不阻塞响应）
               persistMessages({
                 conversationId: resolvedConversationId,
                 userIdentifier,
@@ -124,27 +119,27 @@ export async function POST(request: NextRequest) {
                 userMessage: message,
                 assistantAnswer: aggregatedAnswer,
                 userMessageTimestamp,
-                conversationName: conversationName || undefined,
-              }).catch(err => console.error('保存消息失败:', err))
+                conversationName,
+              }).catch(err => console.error('[Chat] 保存消息失败:', err))
 
               // 发送结束事件
               const endData = JSON.stringify({
                 event: 'message_end',
                 conversation_id: resolvedConversationId,
-                conversation_name: conversationName || '新的对话',
+                conversation_name: conversationName,
               })
               safeEnqueue(encoder.encode(`data: ${endData}\n\n`))
               safeClose()
-              return  // 确保退出循环
+              return
             }
           }
           
-          // 如果循环正常结束但没有收到 isComplete，也要关闭
+          // 循环正常结束，关闭流
           safeClose()
         } catch (error: any) {
-          console.error('Stream error:', error)
+          console.error('[Chat] 流处理错误:', error)
           
-          // 发送错误事件
+          // 发送错误事件给前端
           const errorData = JSON.stringify({
             event: 'error',
             message: error.message || 'AI服务暂时不可用',
@@ -155,7 +150,7 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    // 监听请求中断
+    // 监听请求中断（用户关闭页面等）
     request.signal?.addEventListener('abort', () => {
       isAborted = true
     })
@@ -168,7 +163,7 @@ export async function POST(request: NextRequest) {
       },
     })
   } catch (error) {
-    console.error('聊天错误:', error)
+    console.error('[Chat] 聊天错误:', error)
     return new Response(
       JSON.stringify({ error: '服务器错误' }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
@@ -177,6 +172,10 @@ export async function POST(request: NextRequest) {
 }
 
 // ==================== 保存消息到数据库 ====================
+/**
+ * 将对话消息持久化到 Supabase
+ * 包括会话记录和消息记录
+ */
 async function persistMessages({
   conversationId,
   userIdentifier,
@@ -196,10 +195,10 @@ async function persistMessages({
 }) {
   try {
     const now = new Date()
-    // 用户消息时间稍早（确保顺序）
+    // 用户消息时间稍早，确保消息顺序正确
     const userMessageTime = new Date(userMessageTimestamp.getTime() - 100)
 
-    // 1. 确保会话存在
+    // 1. 创建或更新会话记录
     const { error: convError } = await supabase
       .from('chat_conversations')
       .upsert(
@@ -214,11 +213,11 @@ async function persistMessages({
       )
 
     if (convError) {
-      console.error('保存会话失败:', convError)
+      console.error('[Chat] 保存会话失败:', convError)
       throw convError
     }
 
-    // 2. 检查消息是否已存在（去重）
+    // 2. 检查消息是否已存在（防止重复插入）
     const userMessageTimeStr = userMessageTime.toISOString()
     const assistantMessageTimeStr = now.toISOString()
     
@@ -234,11 +233,11 @@ async function persistMessages({
       .maybeSingle()
 
     if (existingUserMsg) {
-      console.log('用户消息已存在，跳过插入:', existingUserMsg.id)
+      console.log('[Chat] 用户消息已存在，跳过插入:', existingUserMsg.id)
       return
     }
 
-    // 3. 插入消息
+    // 3. 插入用户消息和助手回复
     const { error: msgError } = await supabase.from('chat_messages').insert([
       {
         conversation_id: conversationId,
@@ -257,14 +256,15 @@ async function persistMessages({
     ])
 
     if (msgError) {
+      // 唯一约束冲突（并发插入）
       if (msgError.code === '23505') {
-        console.warn('消息可能已存在（并发插入）:', msgError.message)
+        console.warn('[Chat] 消息可能已存在（并发插入）:', msgError.message)
         return
       }
-      console.error('保存消息失败:', msgError)
+      console.error('[Chat] 保存消息失败:', msgError)
       throw msgError
     }
   } catch (err) {
-    console.error('保存对话历史异常:', err)
+    console.error('[Chat] 保存对话历史异常:', err)
   }
 }
