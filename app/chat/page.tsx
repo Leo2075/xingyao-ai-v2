@@ -888,8 +888,10 @@ function ChatPageContent() {
         const resolvedName = payload.conversation_name || payload.conversation?.name || '新的对话'
         const shouldUpdateConversation = isTemporaryConversation(sessionConversationKey)
         
-        // 检查是否是当前助手
+        // 同时检查助手和对话是否匹配
         const isCurrentAssistant = currentAssistant?.id === assistantSnapshot.id
+        const isCurrentConversation = currentConversationIdRef.current === sessionConversationKey
+        const shouldUpdateUI = isCurrentAssistant && isCurrentConversation
         
         // 迁移全局状态（总是执行，即使在后台）
         if (shouldUpdateConversation) {
@@ -909,8 +911,8 @@ function ChatPageContent() {
           }
         }
         
-        // 只在当前助手时更新UI状态
-        if (isCurrentAssistant) {
+        // 只在助手和对话都匹配时更新UI
+        if (shouldUpdateUI) {
           setCurrentConversationId((prevId) => {
             const isCurrentSession = prevId === sessionConversationKey || prevId === payload.conversation_id
             if (shouldUpdateConversation || isCurrentSession) {
@@ -939,15 +941,18 @@ function ChatPageContent() {
           // 刷新对话列表
           await fetchConversations(assistantSnapshot)
         } else {
-          // 如果不是当前助手，只更新该助手的对话列表缓存
-          console.log('[后台流] 消息完成，助手不匹配，不更新UI', {
-            current: currentAssistant?.name,
-            stream: assistantSnapshot.name,
-            conversation: payload.conversation_id
+          // 后台流或已切换对话：只更新缓存，不更新UI
+          console.log('[后台流] 不更新UI', {
+            助手匹配: isCurrentAssistant,
+            对话匹配: isCurrentConversation,
+            当前助手: currentAssistant?.name,
+            流助手: assistantSnapshot.name,
+            当前对话: currentConversationIdRef.current,
+            流对话: sessionConversationKey
           })
           
-          // 在后台更新对话列表缓存
-          if (shouldUpdateConversation) {
+          // 如果是同一个助手，更新对话列表缓存
+          if (isCurrentAssistant && shouldUpdateConversation) {
             const cachedConvs = getCachedConversations(assistantSnapshot.id, true) || []
             const newConv: Conversation = {
               id: payload.conversation_id,
