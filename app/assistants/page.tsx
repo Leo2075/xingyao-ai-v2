@@ -77,7 +77,7 @@ export default function AssistantsPage() {
           <div className="flex items-center space-x-4">
              {user && (
                <span className="text-sm text-gray-500 hidden md:block">
-                 欢迎回来，{user.username || user.name || '用户'}
+                 Hi，{user.username || user.name || '用户'}
                </span>
              )}
             <button

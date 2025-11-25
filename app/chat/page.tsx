@@ -812,7 +812,7 @@ function ChatPageContent() {
           </div>
 
           {/* Assistant List */}
-          <div className="flex-1 overflow-y-auto py-4 px-3 space-y-1 custom-scrollbar">
+          <div className={`flex-1 overflow-y-auto py-4 space-y-1 custom-scrollbar ${leftSidebarCollapsed ? 'px-2' : 'px-3'}`}>
             {assistants.map((assistant) => {
               const isActive = currentAssistant?.id === assistant.id
               const iconName = assistant.icon_name || 'sparkles'
@@ -822,7 +822,10 @@ function ChatPageContent() {
                   key={assistant.id}
                   onClick={() => selectAssistant(assistant)}
                   className={`
-                    w-full p-3 flex items-center space-x-3 transition-all duration-300 group rounded-xl relative overflow-hidden
+                    flex items-center transition-all duration-300 group rounded-xl relative
+                    ${leftSidebarCollapsed 
+                      ? 'w-12 h-12 justify-center p-1' 
+                      : 'w-full p-2 space-x-3'}
                     ${isActive 
                       ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30' 
                       : 'text-slate-500 hover:bg-white/60 hover:text-slate-800'}
@@ -832,7 +835,7 @@ function ChatPageContent() {
                   <img 
                     src={`/icons/${iconName}.png`} 
                     alt={assistant.name}
-                    className="w-10 h-10 min-w-[40px] min-h-[40px] rounded-xl object-cover flex-shrink-0"
+                    className="w-10 h-10 rounded-xl object-cover flex-shrink-0"
                   />
                   {!leftSidebarCollapsed && (
                     <span className="relative text-sm font-medium truncate flex-1 text-left animate-fade-in">
