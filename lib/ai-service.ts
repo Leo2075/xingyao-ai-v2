@@ -68,7 +68,7 @@ export class AIService {
   }
 
   /**
-   * 中转站模式（OpenAI 格式）
+   * 中转站模式（支持 OpenAI 和 Claude 格式）
    */
   private async *sendToRelay(
     userMessage: string,
@@ -78,48 +78,87 @@ export class AIService {
     // 1. 查询历史消息
     const historyMessages = await this.getHistoryMessages(conversationId, userId)
 
-    // 2. 构造消息数组
-    const messages: AIMessage[] = [
-      ...(this.assistant.system_prompt 
-        ? [{ role: 'system' as const, content: this.assistant.system_prompt }] 
-        : []),
-      ...historyMessages,
-      { role: 'user' as const, content: userMessage },
-    ]
-
+    // 2. 检测 API 格式（根据 URL 判断）
+    const isClaudeFormat = this.assistant.relay_url?.includes('/messages')
+    
     // 3. 构造请求体
-    const body: RelayRequest = {
-      model: this.assistant.relay_model!,
-      messages,
-      temperature: this.assistant.temperature ?? 0.8,
-      max_tokens: this.assistant.max_tokens ?? 2500,
-      top_p: this.assistant.top_p ?? 1.0,
-      frequency_penalty: this.assistant.frequency_penalty ?? 0,
-      presence_penalty: this.assistant.presence_penalty ?? 0,
-      stream: true,
-      ...(this.assistant.advanced_config || {}),  // 合并高级配置
+    let body: Record<string, any>
+    let headers: Record<string, string>
+
+    if (isClaudeFormat) {
+      // Claude 格式
+      const messages = [
+        ...historyMessages,
+        { role: 'user' as const, content: userMessage },
+      ]
+
+      body = {
+        model: this.assistant.relay_model!,
+        max_tokens: this.assistant.max_tokens ?? 2500,
+        temperature: this.assistant.temperature ?? 0.8,
+        stream: true,
+        ...(this.assistant.system_prompt && { system: this.assistant.system_prompt }),
+        messages,
+        ...(this.assistant.advanced_config || {}),
+      }
+
+      headers = {
+        'x-api-key': this.assistant.relay_key!,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      }
+    } else {
+      // OpenAI 格式
+      const messages: AIMessage[] = [
+        ...(this.assistant.system_prompt 
+          ? [{ role: 'system' as const, content: this.assistant.system_prompt }] 
+          : []),
+        ...historyMessages,
+        { role: 'user' as const, content: userMessage },
+      ]
+
+      body = {
+        model: this.assistant.relay_model!,
+        messages,
+        temperature: this.assistant.temperature ?? 0.8,
+        max_tokens: this.assistant.max_tokens ?? 2500,
+        top_p: this.assistant.top_p ?? 1.0,
+        frequency_penalty: this.assistant.frequency_penalty ?? 0,
+        presence_penalty: this.assistant.presence_penalty ?? 0,
+        stream: true,
+        ...(this.assistant.advanced_config || {}),
+      }
+
+      headers = {
+        'Authorization': `Bearer ${this.assistant.relay_key}`,
+        'Content-Type': 'application/json',
+      }
     }
+
+    console.log(`[AIService] 使用 ${isClaudeFormat ? 'Claude' : 'OpenAI'} 格式调用中转站`)
 
     const response = await fetch(this.assistant.relay_url!, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.assistant.relay_key}`,
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(body),
     })
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => '')
       console.error('Relay API error:', response.status, errorText)
-      throw new Error(`Relay API error: ${response.status}`)
+      throw new Error(`Relay API error: ${response.status} - ${errorText}`)
     }
 
     if (!response.body) {
       throw new Error('Relay response body is null')
     }
 
-    yield* this.parseRelayStream(response.body)
+    // 根据格式选择解析器
+    if (isClaudeFormat) {
+      yield* this.parseClaudeStream(response.body)
+    } else {
+      yield* this.parseRelayStream(response.body)
+    }
   }
 
   /**
@@ -259,6 +298,70 @@ export class AIService {
           } catch (e) {
             if (e instanceof SyntaxError) {
               console.warn('Relay parse warning:', e.message, 'data:', data)
+            } else {
+              throw e
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
+  }
+
+  /**
+   * 解析 Claude 流式响应
+   */
+  private async *parseClaudeStream(body: ReadableStream<Uint8Array>): AsyncGenerator<AIStreamChunk> {
+    const reader = body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          // Claude SSE 格式: event: xxx\ndata: {...}
+          if (!line.startsWith('data: ')) continue
+          const data = line.slice(6).trim()
+          
+          if (!data || data === '[DONE]') continue
+
+          try {
+            const json = JSON.parse(data)
+            
+            // 处理错误
+            if (json.type === 'error') {
+              console.error('Claude error:', json.error)
+              throw new Error(json.error?.message || 'Claude API error')
+            }
+
+            // content_block_delta 事件包含实际内容
+            if (json.type === 'content_block_delta') {
+              const content = json.delta?.text || ''
+              if (content) {
+                yield { content, isComplete: false }
+              }
+            }
+
+            // message_stop 表示完成
+            if (json.type === 'message_stop') {
+              yield { content: '', isComplete: true }
+            }
+
+            // message_delta 可能包含 stop_reason
+            if (json.type === 'message_delta' && json.delta?.stop_reason) {
+              yield { content: '', isComplete: true }
+            }
+          } catch (e) {
+            if (e instanceof SyntaxError) {
+              console.warn('Claude parse warning:', e.message, 'data:', data)
             } else {
               throw e
             }
