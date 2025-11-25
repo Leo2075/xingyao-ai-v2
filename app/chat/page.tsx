@@ -173,6 +173,7 @@ function ChatPageContent() {
   const scrollIntentRef = useRef<'instant' | 'smooth' | null>(null)
   const currentConversationIdRef = useRef<string>('')
   const menuRefs = useRef<Map<string, HTMLElement>>(new Map())
+  const autoFocusLatestConversationRef = useRef<string | null>(null)
   
   // ==================== 全局会话状态管理 ====================
   /** 存储所有对话的状态（消息、输出状态等） */
@@ -184,7 +185,7 @@ function ChatPageContent() {
   const searchParams = useSearchParams()
   const [user, setUser] = useState<any>(null)
   
-  const isTemporaryConversation = (id?: string) => Boolean(id && id.startsWith('temp-'))
+  const isTemporaryConversation = useCallback((id?: string) => Boolean(id && id.startsWith('temp-')), [])
 
   // ==================== 状态存储与恢复 ====================
   
@@ -227,9 +228,9 @@ function ChatPageContent() {
   }, [])
 
   // Scroll Helpers
-  const requestScrollToBottom = (mode: 'instant' | 'smooth' = 'instant') => {
+  const requestScrollToBottom = useCallback((mode: 'instant' | 'smooth' = 'instant') => {
     scrollIntentRef.current = mode
-  }
+  }, [])
 
   const scrollToBottom = (instant = true) => {
     const container = messagesContainerRef.current
@@ -292,6 +293,12 @@ function ChatPageContent() {
 
   useEffect(() => {
     currentConversationIdRef.current = currentConversationId
+  }, [currentConversationId])
+
+  useEffect(() => {
+    if (currentConversationId) {
+      autoFocusLatestConversationRef.current = null
+    }
   }, [currentConversationId])
 
   useEffect(() => {
@@ -505,7 +512,7 @@ function ChatPageContent() {
   }
 
   // ==================== 加载对话（优先恢复状态） ====================
-  const loadConversation = async (conversationId: string, skipAssistantCheck = false) => {
+  const loadConversation = useCallback(async (conversationId: string, skipAssistantCheck = false) => {
     if (!skipAssistantCheck && !currentAssistant) return
     
     // 保存当前对话状态
@@ -576,7 +583,36 @@ function ChatPageContent() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [
+    currentAssistant,
+    isTemporaryConversation,
+    requestScrollToBottom,
+    restoreConversationState,
+    saveCurrentConversationState,
+    user?.id,
+  ])
+
+  useEffect(() => {
+    if (!currentAssistant) return
+    if (!conversations.length) return
+
+    const latestRealConversation = conversations.find((conv) => !isTemporaryConversation(conv.id))
+    if (!latestRealConversation) return
+
+    const currentId = currentConversationIdRef.current
+    if (currentId) {
+      if (isTemporaryConversation(currentId)) return
+      const existsInList = conversations.some((conv) => conv.id === currentId)
+      if (existsInList) {
+        autoFocusLatestConversationRef.current = null
+        return
+      }
+    }
+
+    if (autoFocusLatestConversationRef.current === latestRealConversation.id) return
+    autoFocusLatestConversationRef.current = latestRealConversation.id
+    loadConversation(latestRealConversation.id, true)
+  }, [conversations, currentAssistant, isTemporaryConversation, loadConversation])
 
   const startNewConversation = () => {
     // 保存当前对话状态
