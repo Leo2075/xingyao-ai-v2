@@ -128,9 +128,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 构建插入数据
-    // 注意：如果旧字段 (dify_api_key, dify_app_id) 仍有 NOT NULL 约束，需要同时填充
-    const insertData: Record<string, unknown> = {
+    console.log('收到创建请求:', JSON.stringify(body, null, 2))
+    console.log('Supabase URL:', process.env.NEXT_PUBLIC_SUPABASE_URL ? '已配置' : '未配置')
+
+    // 先尝试用新字段插入
+    const fullInsertData: Record<string, unknown> = {
       name: body.name,
       description: body.description || '',
       icon_name: body.icon_name || 'brain',
@@ -150,21 +152,52 @@ export async function POST(request: NextRequest) {
       presence_penalty: body.presence_penalty ?? 0,
       context_window: body.context_window ?? 20,
       // 兼容旧字段（如果表中仍有 NOT NULL 约束）
-      dify_api_key: body.dify_key || 'migrated',
-      dify_app_id: 'app-migrated',
+      dify_api_key: body.dify_key || body.relay_key || 'placeholder',
+      dify_app_id: 'app-placeholder',
       dify_base_url: body.dify_url || 'https://api.dify.ai/v1',
     }
 
-    console.log('准备插入数据:', JSON.stringify(insertData, null, 2))
-    console.log('Supabase URL:', process.env.NEXT_PUBLIC_SUPABASE_URL ? '已配置' : '未配置')
-
     let { data: assistant, error } = await supabase
       .from('assistants')
-      .insert(insertData)
+      .insert(fullInsertData)
       .select()
       .single()
 
-    if (error) {
+    // 如果新字段不存在，尝试只用旧字段插入
+    if (error && (error.message?.includes('column') || error.code === '42703')) {
+      console.log('新字段不存在，尝试使用旧结构插入...')
+      
+      const legacyInsertData: Record<string, unknown> = {
+        name: body.name,
+        description: body.description || '',
+        icon_name: body.icon_name || 'brain',
+        status: 'active',
+        // 旧字段
+        dify_api_key: body.dify_key || body.relay_key || 'placeholder',
+        dify_app_id: 'app-placeholder',
+        dify_base_url: body.dify_url || body.relay_url || 'https://api.dify.ai/v1',
+      }
+
+      const result = await supabase
+        .from('assistants')
+        .insert(legacyInsertData)
+        .select()
+        .single()
+
+      assistant = result.data
+      error = result.error
+
+      if (error) {
+        console.error('使用旧结构创建助手也失败:', error)
+        return NextResponse.json(
+          { 
+            error: '创建助手失败: ' + error.message,
+            hint: '请先在 Supabase 中执行迁移脚本: supabase/migrations/add_dual_mode_config.sql'
+          },
+          { status: 500 }
+        )
+      }
+    } else if (error) {
       console.error('创建助手失败:', error)
       return NextResponse.json(
         { error: '创建助手失败: ' + error.message },
