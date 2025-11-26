@@ -1118,8 +1118,13 @@ function ChatPageContent() {
         messages: sortMessages([...state.messages, fallbackMessage]),
       }))
     } finally {
-      // 清理活跃流
-      activeStreamsRef.current.delete(sessionConversationKey)
+      // 清理活跃流（注意：如果发生了ID迁移，需要清理迁移后的真实ID）
+      const finalId = getRealConversationId(sessionConversationKey)
+      activeStreamsRef.current.delete(finalId)
+      // 双重保险：如果ID没变或者映射有问题，尝试清理原始ID
+      if (finalId !== sessionConversationKey) {
+        activeStreamsRef.current.delete(sessionConversationKey)
+      }
       
       // 更新状态
       updateConversationState(sessionConversationKey, state => ({
