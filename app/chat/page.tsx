@@ -991,15 +991,38 @@ function ChatPageContent() {
           
           // 4. 总是更新conversations列表（无论前台后台）
           // 只有当该对话属于当前显示的助手时，才去更新列表状态，避免副作用
+          // 注意：这里必须使用 sessionConversationKey 来判断，因为 conversations 列表中可能还是临时 ID
           if (currentAssistantRef.current && assistantSnapshot.id === currentAssistantRef.current.id) {
             setConversations((prev) => {
-              return prev.map((conv) => {
+              // 1. 更新已存在的对话（临时ID -> 真实ID）
+              const updated = prev.map((conv) => {
                 if (conv.id === sessionConversationKey) {
                   return { ...conv, id: payload.conversation_id, name: resolvedName, updated_at: toSeconds(Date.now()) }
                 }
                 return conv
               })
+              
+              // 2. 重新排序（保持置顶）
+              return sortConversationsWithTemp(updated, isTemporaryConversation)
             })
+          } else {
+            // 如果当前在别的助手界面，虽然不更新UI列表，但需要更新缓存
+            // 这样下次切回来时能看到
+            const cachedConvs = getCachedConversations(assistantSnapshot.id, true) || []
+            // 检查缓存中是否已存在（避免重复）
+            const existsInCache = cachedConvs.some(c => c.id === payload.conversation_id || c.id === sessionConversationKey)
+            
+            if (!existsInCache) {
+               const newConv: Conversation = {
+                id: payload.conversation_id,
+                name: resolvedName,
+                created_at: toSeconds(Date.now()),
+                updated_at: toSeconds(Date.now())
+              }
+              // 过滤掉临时的
+              const validCache = cachedConvs.filter(c => !isTemporaryConversation(c.id))
+              saveConversationCache(assistantSnapshot.id, [newConv, ...validCache])
+            }
           }
         }
         
