@@ -401,6 +401,11 @@ function ChatPageContent() {
 
   // ==================== 切换助手（不中断请求） ====================
   const selectAssistant = async (assistant: Assistant) => {
+    if (currentAssistant?.id === assistant.id) return
+    
+    // 手动更新 ref，确保后续调用使用的是最新助手
+    currentAssistantRef.current = assistant
+
     // 保存当前对话状态（不中断流请求）
     saveCurrentConversationState()
     
@@ -429,32 +434,47 @@ function ChatPageContent() {
       return false
     }
 
-    const cached = getCachedConversations(assistant.id, true)
-    if (cached && cached.length > 0) {
-      const sortedCached = sortConversationsWithTemp(cached, isTemporaryConversation)
-      setConversations(prev => {
-        const temps = prev.filter(c => isTemporaryConversation(c.id))
-        return sortConversationsWithTemp([...temps, ...sortedCached], isTemporaryConversation)
+    // 1. 获取缓存的真实对话
+    const cached = getCachedConversations(assistant.id, true) || []
+    
+    // 2. 找回属于该助手的活跃临时对话（正在生成的）
+    const activeStreams = Array.from(activeStreamsRef.current.values())
+      .filter(stream => stream.assistantId === assistant.id)
+    
+    const activeTemps: Conversation[] = []
+    activeStreams.forEach(stream => {
+      // 如果缓存中已经有了（可能已转正），就不用添加
+      if (cached.some(c => c.id === stream.conversationId)) return
+      
+      // 恢复临时对话显示
+      activeTemps.push({
+        id: stream.conversationId,
+        name: '新的对话',
+        created_at: toSeconds(Date.now()),
+        updated_at: toSeconds(Date.now()),
       })
+    })
+
+    const combined = [...activeTemps, ...cached]
+    const sorted = sortConversationsWithTemp(combined, isTemporaryConversation)
+
+    setConversations(sorted)
+    
+    // 如果有缓存或活跃流，先用它们显示，不显示 loading
+    if (sorted.length > 0) {
       setConversationsLoading(false)
-      
-      // 先尝试从缓存加载
-      ensureActiveConversation(sortedCached)
-      
-      // 后台刷新，刷新完成后根据最新数据兜底
-      fetchConversations(assistant, false).then(freshConversations => {
-        if (freshConversations && freshConversations.length > 0) {
-          ensureActiveConversation(freshConversations)
-        }
-      })
+      ensureActiveConversation(sorted)
     } else {
-      setConversations(prev => prev.filter(c => isTemporaryConversation(c.id)))
+      // 没有任何数据，显示 loading
       setConversationsLoading(true)
-      const conversations = await fetchConversations(assistant, true)
-      if (conversations && conversations.length > 0) {
-        ensureActiveConversation(conversations)
-      }
     }
+      
+    // 后台刷新，刷新完成后根据最新数据兜底
+    fetchConversations(assistant, sorted.length === 0).then(freshConversations => {
+      if (freshConversations && freshConversations.length > 0) {
+        ensureActiveConversation(freshConversations)
+      }
+    })
   }
 
   const fetchConversations = async (assistant: Assistant, showLoading = false): Promise<Conversation[] | null> => {
@@ -535,7 +555,7 @@ function ChatPageContent() {
     mode: 'replace' | 'prepend' = 'replace',
     scrollSnapshot?: { height: number; top: number },
   ) => {
-    if (!currentAssistant) return
+    if (!currentAssistantRef.current) return
     
     // 获取真实ID
     const realId = getRealConversationId(conversationId)
@@ -592,7 +612,7 @@ function ChatPageContent() {
 
   // ==================== 加载对话（优先恢复状态） ====================
   const loadConversation = useCallback(async (conversationId: string, skipAssistantCheck = false) => {
-    if (!skipAssistantCheck && !currentAssistant) return
+    if (!skipAssistantCheck && !currentAssistantRef.current) return
     
     // 获取真实ID（处理临时ID映射）
     const realId = getRealConversationId(conversationId)
