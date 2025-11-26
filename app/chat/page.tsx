@@ -190,6 +190,8 @@ function ChatPageContent() {
   const requestDeduplicatorRef = useRef(new RequestDeduplicator())
   /** 临时ID到真实ID的映射表 */
   const conversationIdMapRef = useRef<Map<string, string>>(new Map())
+  /** 当前助手 Ref (解决闭包问题) */
+  const currentAssistantRef = useRef<Assistant | null>(null)
   
   // ==================== 性能优化 - useMemo ====================
   // 缓存是否有活跃流
@@ -201,6 +203,11 @@ function ChatPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [user, setUser] = useState<any>(null)
+  
+  // 同步 currentAssistant 到 ref
+  useEffect(() => {
+    currentAssistantRef.current = currentAssistant
+  }, [currentAssistant])
   
   const isTemporaryConversation = useCallback((id?: string) => Boolean(id && id.startsWith('temp-')), [])
   
@@ -488,7 +495,8 @@ function ChatPageContent() {
             let nextList: Conversation[] = []
             
             // 只有当请求的助手是当前显示的助手时，才更新 UI
-            if (currentAssistant && assistant.id === currentAssistant.id) {
+            // 使用 ref 确保获取到最新的当前助手状态，避免闭包问题
+            if (currentAssistantRef.current && assistant.id === currentAssistantRef.current.id) {
               setConversations((prev) => {
                 const temps = prev.filter((item) => isTemporaryConversation(item.id))
                 const combined = [...temps, ...normalized]
@@ -907,7 +915,7 @@ function ChatPageContent() {
       /** 更新助手消息（同时更新 UI 和全局状态） */
       const updateAssistantMessage = () => {
         // 检查是否是当前助手和当前对话
-        const isCurrentAssistant = currentAssistant?.id === assistantSnapshot.id
+        const isCurrentAssistant = currentAssistantRef.current?.id === assistantSnapshot.id
         const isCurrentConversation = currentConversationIdRef.current === sessionConversationKey
         
         // 总是更新全局状态（即使在后台）
@@ -938,7 +946,7 @@ function ChatPageContent() {
         
         // 检查助手和对话是否匹配
         // 注意：这里使用 getRealConversationId 来进行更准确的比较
-        const isCurrentAssistant = currentAssistant?.id === assistantSnapshot.id
+        const isCurrentAssistant = currentAssistantRef.current?.id === assistantSnapshot.id
         const currentRealId = getRealConversationId(currentConversationIdRef.current)
         const sessionRealId = shouldUpdateConversation ? payload.conversation_id : sessionConversationKey
         
@@ -983,7 +991,7 @@ function ChatPageContent() {
           
           // 4. 总是更新conversations列表（无论前台后台）
           // 只有当该对话属于当前显示的助手时，才去更新列表状态，避免副作用
-          if (currentAssistant && assistantSnapshot.id === currentAssistant.id) {
+          if (currentAssistantRef.current && assistantSnapshot.id === currentAssistantRef.current.id) {
             setConversations((prev) => {
               return prev.map((conv) => {
                 if (conv.id === sessionConversationKey) {
@@ -1018,7 +1026,7 @@ function ChatPageContent() {
               aiMessage.content += jsonData.answer || ''
               
               // 检查是否是当前助手和当前对话
-              const isCurrentAssistant = currentAssistant?.id === assistantSnapshot.id
+              const isCurrentAssistant = currentAssistantRef.current?.id === assistantSnapshot.id
               const isCurrentConversation = getRealConversationId(currentConversationIdRef.current) === getRealConversationId(sessionConversationKey)
               
               // 更新全局状态中的 typing 状态
