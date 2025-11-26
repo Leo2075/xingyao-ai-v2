@@ -188,6 +188,8 @@ function ChatPageContent() {
   const activeStreamsRef = useRef<Map<string, ActiveStream>>(new Map())
   /** 请求去重器 - 防止重复请求 */
   const requestDeduplicatorRef = useRef(new RequestDeduplicator())
+  /** 临时ID到真实ID的映射表 */
+  const conversationIdMapRef = useRef<Map<string, string>>(new Map())
   
   // ==================== 性能优化 - useMemo ====================
   // 缓存是否有活跃流
@@ -201,6 +203,12 @@ function ChatPageContent() {
   const [user, setUser] = useState<any>(null)
   
   const isTemporaryConversation = useCallback((id?: string) => Boolean(id && id.startsWith('temp-')), [])
+  
+  /** 获取真实对话ID（处理临时ID映射） */
+  const getRealConversationId = useCallback((id: string) => {
+    if (!id) return id
+    return conversationIdMapRef.current.get(id) || id
+  }, [])
 
   // ==================== 状态存储与恢复 ====================
   
@@ -497,16 +505,19 @@ function ChatPageContent() {
   ) => {
     if (!currentAssistant) return
     
+    // 获取真实ID
+    const realId = getRealConversationId(conversationId)
+    
     // 使用请求去重器，防止重复加载相同消息
     return await requestDeduplicatorRef.current.dedupe(
-      `messages_${conversationId}_${cursorRounds}_${mode}`,
-      () => measurePerformance(`加载消息[${conversationId.slice(0, 8)}][轮次:${cursorRounds}]`, async () => {
+      `messages_${realId}_${cursorRounds}_${mode}`,
+      () => measurePerformance(`加载消息[${realId.slice(0, 8)}][轮次:${cursorRounds}]`, async () => {
         try {
           const response = await fetch('/api/dify/messages', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              conversationId,
+              conversationId: realId,
               userId: user?.id,
               cursorRounds,
               rounds: 5,
@@ -516,7 +527,7 @@ function ChatPageContent() {
           const data = await response.json()
           if (response.ok && data.messages) {
             const normalized = sortMessages(data.messages.map(normalizeMessage))
-            if (currentConversationIdRef.current === conversationId) {
+            if (currentConversationIdRef.current === realId) {
               if (mode === 'prepend') {
                 setMessages(prev => {
                   const existingIds = new Set(prev.map(m => m.id))
@@ -551,16 +562,19 @@ function ChatPageContent() {
   const loadConversation = useCallback(async (conversationId: string, skipAssistantCheck = false) => {
     if (!skipAssistantCheck && !currentAssistant) return
     
+    // 获取真实ID（处理临时ID映射）
+    const realId = getRealConversationId(conversationId)
+    
     // 保存当前对话状态
     saveCurrentConversationState()
     
-    setCurrentConversationId(conversationId)
-    currentConversationIdRef.current = conversationId
+    setCurrentConversationId(realId)
+    currentConversationIdRef.current = realId
     setShowLoadMoreHint(false)
     setMobileHistoryOpen(false)
 
     // 尝试从全局状态恢复
-    const savedState = restoreConversationState(conversationId)
+    const savedState = restoreConversationState(realId)
     if (savedState && savedState.messages.length > 0) {
       // 恢复保存的状态
       setMessages(savedState.messages)
@@ -571,8 +585,8 @@ function ChatPageContent() {
       return
     }
 
-    // 临时对话不需要加载
-    if (isTemporaryConversation(conversationId)) {
+    // 临时对话不需要加载（用真实ID判断）
+    if (isTemporaryConversation(realId)) {
       setMessages([])
       setCurrentCursorRounds(null)
       setAssistantTyping(false)
@@ -621,6 +635,7 @@ function ChatPageContent() {
     }
   }, [
     currentAssistant,
+    getRealConversationId,
     isTemporaryConversation,
     requestScrollToBottom,
     restoreConversationState,
@@ -672,23 +687,24 @@ function ChatPageContent() {
   }
 
   const renameConversation = async (conversationId: string, name: string) => {
-    if (!currentAssistant || !name.trim() || isTemporaryConversation(conversationId)) return
+    const realId = getRealConversationId(conversationId)
+    if (!currentAssistant || !name.trim() || isTemporaryConversation(realId)) return
     const trimmedName = name.trim()
     const oldConversations = [...conversations]
-    setConversations(prev => prev.map(c => c.id === conversationId ? { ...c, name: trimmedName } as Conversation : c))
+    setConversations(prev => prev.map(c => c.id === realId ? { ...c, name: trimmedName } as Conversation : c))
     setEditingConversationId('')
     setEditingName('')
     setActionMenuId('')
 
     try {
-      await fetch(`/api/dify/conversations/${conversationId}`, {
+      await fetch(`/api/dify/conversations/${realId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ assistantId: currentAssistant.id, userId: user?.id, name: trimmedName }),
       })
       const cached = conversationCacheRef.current.get(currentAssistant.id)
       if (cached) {
-        const updatedCache = cached.data.map(c => c.id === conversationId ? { ...c, name: trimmedName } : c)
+        const updatedCache = cached.data.map(c => c.id === realId ? { ...c, name: trimmedName } : c)
         saveConversationCache(currentAssistant.id, updatedCache)
       }
     } catch (e) {
@@ -698,25 +714,33 @@ function ChatPageContent() {
   }
 
   const deleteConversation = async (conversationId: string) => {
-    if (!currentAssistant || isTemporaryConversation(conversationId)) {
+    const realId = getRealConversationId(conversationId)
+    
+    if (!currentAssistant || isTemporaryConversation(realId)) {
       setActionMenuId('')
       return
     }
     
+    // 清除映射关系
+    conversationIdMapRef.current.delete(conversationId)
+    if (conversationId !== realId) {
+      conversationIdMapRef.current.delete(realId)
+    }
+    
     // 清除该对话的全局状态
-    conversationStatesRef.current.delete(conversationId)
+    conversationStatesRef.current.delete(realId)
     
     // 取消该对话的活跃流
-    const activeStream = activeStreamsRef.current.get(conversationId)
+    const activeStream = activeStreamsRef.current.get(realId)
     if (activeStream) {
       activeStream.abortController.abort()
-      activeStreamsRef.current.delete(conversationId)
+      activeStreamsRef.current.delete(realId)
     }
     
     const previousConversations = conversations
-    setConversations(prev => prev.filter(c => c.id !== conversationId))
+    setConversations(prev => prev.filter(c => c.id !== realId))
 
-    if (currentConversationId === conversationId) {
+    if (currentConversationId === realId) {
       setCurrentConversationId('')
       setMessages([])
       setCurrentCursorRounds(null)
@@ -726,7 +750,7 @@ function ChatPageContent() {
     }
 
     try {
-      const response = await fetch(`/api/dify/conversations/${conversationId}`, {
+      const response = await fetch(`/api/dify/conversations/${realId}`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ assistantId: currentAssistant.id, userId: user?.id }),
@@ -736,8 +760,8 @@ function ChatPageContent() {
     } catch (error) {
       console.error('删除对话失败:', error)
       setConversations(previousConversations)
-      if (currentConversationId === conversationId) {
-        setCurrentConversationId(conversationId)
+      if (currentConversationId === realId) {
+        setCurrentConversationId(realId)
       }
     } finally {
       setActionMenuId('')
@@ -888,19 +912,24 @@ function ChatPageContent() {
         const resolvedName = payload.conversation_name || payload.conversation?.name || '新的对话'
         const shouldUpdateConversation = isTemporaryConversation(sessionConversationKey)
         
-        // 同时检查助手和对话是否匹配
+        // 检查助手和对话是否匹配
         const isCurrentAssistant = currentAssistant?.id === assistantSnapshot.id
         const isCurrentConversation = currentConversationIdRef.current === sessionConversationKey
         const shouldUpdateUI = isCurrentAssistant && isCurrentConversation
         
-        // 迁移全局状态（总是执行，即使在后台）
+        // 临时对话转正：建立映射 + 迁移状态 + 更新列表
         if (shouldUpdateConversation) {
+          // 1. 建立ID映射（临时ID → 真实ID）
+          conversationIdMapRef.current.set(sessionConversationKey, payload.conversation_id)
+          
+          // 2. 迁移全局状态
           const oldState = conversationStatesRef.current.get(sessionConversationKey)
           if (oldState) {
             conversationStatesRef.current.delete(sessionConversationKey)
             conversationStatesRef.current.set(payload.conversation_id, oldState)
           }
           
+          // 3. 迁移活跃流
           const oldStream = activeStreamsRef.current.get(sessionConversationKey)
           if (oldStream) {
             activeStreamsRef.current.delete(sessionConversationKey)
@@ -909,59 +938,26 @@ function ChatPageContent() {
               conversationId: payload.conversation_id,
             })
           }
+          
+          // 4. 总是更新conversations列表（无论前台后台）
+          setConversations((prev) => {
+            return prev.map((conv) => {
+              if (conv.id === sessionConversationKey) {
+                return { ...conv, id: payload.conversation_id, name: resolvedName, updated_at: toSeconds(Date.now()) }
+              }
+              return conv
+            })
+          })
         }
         
-        // 只在助手和对话都匹配时更新UI
+        // UI更新：只在当前助手和当前对话时执行
         if (shouldUpdateUI) {
-          setCurrentConversationId((prevId) => {
-            const isCurrentSession = prevId === sessionConversationKey || prevId === payload.conversation_id
-            if (shouldUpdateConversation || isCurrentSession) {
-              setConversations((prev) => {
-                let updatedList = prev.map((conv) => {
-                  if (shouldUpdateConversation && conv.id === sessionConversationKey) {
-                    return { ...conv, id: payload.conversation_id, name: resolvedName, updated_at: toSeconds(Date.now()) }
-                  }
-                  return conv
-                })
-                if (shouldUpdateConversation && !prev.find(c => c.id === sessionConversationKey) && !prev.find(c => c.id === payload.conversation_id)) {
-                  updatedList = [...updatedList, { id: payload.conversation_id, name: resolvedName, created_at: toSeconds(Date.now()), updated_at: toSeconds(Date.now()) }]
-                }
-                return sortConversationsWithTemp(updatedList, isTemporaryConversation)
-              })
-              if (shouldUpdateConversation || isCurrentSession) return payload.conversation_id
-            }
-            return prevId
-          })
-          
-          // 更新 ref
-          if (currentConversationIdRef.current === sessionConversationKey) {
-            currentConversationIdRef.current = payload.conversation_id
-          }
-          
-          // 刷新对话列表
+          setCurrentConversationId(payload.conversation_id)
+          currentConversationIdRef.current = payload.conversation_id
           await fetchConversations(assistantSnapshot)
-        } else {
-          // 后台流或已切换对话：只更新缓存，不更新UI
-          console.log('[后台流] 不更新UI', {
-            助手匹配: isCurrentAssistant,
-            对话匹配: isCurrentConversation,
-            当前助手: currentAssistant?.name,
-            流助手: assistantSnapshot.name,
-            当前对话: currentConversationIdRef.current,
-            流对话: sessionConversationKey
-          })
-          
-          // 如果是同一个助手，更新对话列表缓存
-          if (isCurrentAssistant && shouldUpdateConversation) {
-            const cachedConvs = getCachedConversations(assistantSnapshot.id, true) || []
-            const newConv: Conversation = {
-              id: payload.conversation_id,
-              name: resolvedName,
-              created_at: toSeconds(Date.now()),
-              updated_at: toSeconds(Date.now())
-            }
-            saveConversationCache(assistantSnapshot.id, [newConv, ...cachedConvs])
-          }
+        } else if (isCurrentAssistant) {
+          // 同助手但不同对话：刷新对话列表
+          await fetchConversations(assistantSnapshot)
         }
       }
 
