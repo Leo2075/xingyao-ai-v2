@@ -233,22 +233,26 @@ function ChatPageContent() {
     conversationId: string,
     updater: (state: ConversationState) => ConversationState
   ) => {
-    const current = conversationStatesRef.current.get(conversationId) || {
+    // 获取真实ID（确保即使ID发生了迁移，也能更新到正确的状态）
+    const realId = getRealConversationId(conversationId)
+    
+    const current = conversationStatesRef.current.get(realId) || {
       messages: [],
       isTyping: false,
       isLoading: false,
       cursorRounds: null,
     }
-    conversationStatesRef.current.set(conversationId, updater(current))
+    conversationStatesRef.current.set(realId, updater(current))
     
     // 如果是当前显示的对话，同步更新 UI
-    if (currentConversationIdRef.current === conversationId) {
-      const updated = conversationStatesRef.current.get(conversationId)!
+    // 注意：currentConversationIdRef.current 可能是临时ID，也可能是真实ID，统一转为真实ID比较
+    if (getRealConversationId(currentConversationIdRef.current) === realId) {
+      const updated = conversationStatesRef.current.get(realId)!
       setMessages(updated.messages)
       setAssistantTyping(updated.isTyping)
       setLoading(updated.isLoading)
     }
-  }, [])
+  }, [getRealConversationId])
 
   // Scroll Helpers
   const requestScrollToBottom = useCallback((mode: 'instant' | 'smooth' = 'instant') => {
@@ -465,26 +469,46 @@ function ChatPageContent() {
             const normalized: Conversation[] = data.conversations
               .map(normalizeConversation)
               .filter((item: Conversation) => Boolean(item.id))
-            let nextList: Conversation[] = []
-            setConversations((prev) => {
-              const temps = prev.filter((item) => isTemporaryConversation(item.id))
-              const combined = [...temps, ...normalized]
-              const dedupedMap = new Map<string, Conversation>()
-              combined.forEach((conv) => {
-                if (!conv.id) return
-                dedupedMap.set(conv.id, conv)
-              })
-              nextList = sortConversationsWithTemp(Array.from(dedupedMap.values()), isTemporaryConversation)
-              
-              // 优化：只在实际变化时更新
-              if (JSON.stringify(prev) === JSON.stringify(nextList)) {
-                return prev
-              }
-              return nextList
-            })
-            const cacheable = nextList.filter((item) => !isTemporaryConversation(item.id))
+            
+            // 构造新的列表（用于缓存和返回）
+            // 注意：这里不直接依赖 state，因为我们可能不更新 state
+            const cacheable = normalized.filter((item) => !isTemporaryConversation(item.id))
             saveConversationCache(assistant.id, cacheable)
-            return nextList
+
+            // 检查是否是当前助手，如果是才更新 state
+            // 使用 ref 获取最新的 currentAssistant，避免闭包问题（虽然这个函数也是闭包）
+            // 但这里我们假设 external call 会传入正确的 assistant 对象
+            // 我们需要比较传入的 assistant 和当前的 currentAssistant
+            
+            // 注意：在 React 状态更新函数 setConversations 内部无法直接访问最新的 currentAssistant state
+            // 除非我们使用 ref 来存储 currentAssistant，或者依赖 fetchConversations 的闭包
+            // 这里我们简单地检查 assistant.id === currentAssistant?.id
+            // 但为了保险，我们在 setConversations 内部做逻辑（虽然 setConversations 无法访问外部 state 的最新值... wait, it can）
+            
+            let nextList: Conversation[] = []
+            
+            // 只有当请求的助手是当前显示的助手时，才更新 UI
+            if (currentAssistant && assistant.id === currentAssistant.id) {
+              setConversations((prev) => {
+                const temps = prev.filter((item) => isTemporaryConversation(item.id))
+                const combined = [...temps, ...normalized]
+                const dedupedMap = new Map<string, Conversation>()
+                combined.forEach((conv) => {
+                  if (!conv.id) return
+                  dedupedMap.set(conv.id, conv)
+                })
+                nextList = sortConversationsWithTemp(Array.from(dedupedMap.values()), isTemporaryConversation)
+                
+                if (JSON.stringify(prev) === JSON.stringify(nextList)) {
+                  return prev
+                }
+                return nextList
+              })
+              return nextList
+            } else {
+              // 如果不是当前助手，直接返回服务器数据（已排序）
+              return normalized.sort((a, b) => b.updated_at - a.updated_at)
+            }
           }
           return null
         } catch (error) {
@@ -913,8 +937,13 @@ function ChatPageContent() {
         const shouldUpdateConversation = isTemporaryConversation(sessionConversationKey)
         
         // 检查助手和对话是否匹配
+        // 注意：这里使用 getRealConversationId 来进行更准确的比较
         const isCurrentAssistant = currentAssistant?.id === assistantSnapshot.id
-        const isCurrentConversation = currentConversationIdRef.current === sessionConversationKey
+        const currentRealId = getRealConversationId(currentConversationIdRef.current)
+        const sessionRealId = shouldUpdateConversation ? payload.conversation_id : sessionConversationKey
+        
+        // 如果用户还在原来的临时ID对话上，或者已经切换到了迁移后的真实ID对话上，都算作当前对话
+        const isCurrentConversation = currentRealId === sessionRealId || currentConversationIdRef.current === sessionConversationKey
         const shouldUpdateUI = isCurrentAssistant && isCurrentConversation
         
         // 临时对话转正：建立映射 + 迁移状态 + 更新列表
@@ -938,16 +967,32 @@ function ChatPageContent() {
               conversationId: payload.conversation_id,
             })
           }
+
+          // 3.5 强制更新一次新ID的状态，确保包含完整的 aiMessage
+          // 防止因为迁移时序问题导致后续的 processChunk 更新丢失
+          updateConversationState(payload.conversation_id, state => {
+            const updated = [...state.messages]
+            const index = updated.findIndex(msg => msg.id === aiMessageId)
+            if (index === -1) {
+              updated.push({ ...aiMessage })
+            } else {
+              updated[index] = { ...aiMessage }
+            }
+            return { ...state, messages: sortMessages(updated) }
+          })
           
           // 4. 总是更新conversations列表（无论前台后台）
-          setConversations((prev) => {
-            return prev.map((conv) => {
-              if (conv.id === sessionConversationKey) {
-                return { ...conv, id: payload.conversation_id, name: resolvedName, updated_at: toSeconds(Date.now()) }
-              }
-              return conv
+          // 只有当该对话属于当前显示的助手时，才去更新列表状态，避免副作用
+          if (currentAssistant && assistantSnapshot.id === currentAssistant.id) {
+            setConversations((prev) => {
+              return prev.map((conv) => {
+                if (conv.id === sessionConversationKey) {
+                  return { ...conv, id: payload.conversation_id, name: resolvedName, updated_at: toSeconds(Date.now()) }
+                }
+                return conv
+              })
             })
-          })
+          }
         }
         
         // UI更新：只在当前助手和当前对话时执行
@@ -974,7 +1019,7 @@ function ChatPageContent() {
               
               // 检查是否是当前助手和当前对话
               const isCurrentAssistant = currentAssistant?.id === assistantSnapshot.id
-              const isCurrentConversation = currentConversationIdRef.current === sessionConversationKey
+              const isCurrentConversation = getRealConversationId(currentConversationIdRef.current) === getRealConversationId(sessionConversationKey)
               
               // 更新全局状态中的 typing 状态
               updateConversationState(sessionConversationKey, state => ({
@@ -988,6 +1033,7 @@ function ChatPageContent() {
                 updateAssistantMessage()
               } else {
                 // 后台流：只更新全局状态，不更新UI
+                // 注意：updateConversationState 内部已经处理了 ID 映射，所以即使 ID 已经迁移，这里传入 sessionConversationKey 也是安全的
                 updateConversationState(sessionConversationKey, state => {
                   const updated = [...state.messages]
                   const index = updated.findIndex(msg => msg.id === aiMessageId)
