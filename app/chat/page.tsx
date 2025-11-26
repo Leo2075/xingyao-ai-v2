@@ -614,6 +614,15 @@ function ChatPageContent() {
       setLoading(savedState.isLoading)
       setCurrentCursorRounds(savedState.cursorRounds)
       requestScrollToBottom('instant')
+      
+      // 关键修改：如果状态中认为 isLoading 为 true，但实际上没有活跃流，说明之前的流可能异常中断或已在后台完成但状态未正确重置
+      // 这种情况下，我们需要静默重新拉取一次最新消息，确保数据完整
+      // 注意：这里不直接依赖 activeStreamsRef.current.has(realId)，因为组件重渲染可能导致 ref 丢失（虽然 ref 应该持久）
+      // 更可靠的是检查消息完整性。
+      // 简单起见，如果恢复的状态只包含很少的消息（比如只有最新一轮），且不是新建对话，尝试后台补全
+      if (!isTemporaryConversation(realId) && savedState.messages.length <= 2) {
+         fetchConversationMessages(realId, 0, 'replace')
+      }
       return
     }
 
@@ -633,33 +642,8 @@ function ChatPageContent() {
     setLoading(true)
     
     try {
-      const response = await fetch('/api/dify/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          conversationId,
-          userId: user?.id,
-          cursorRounds: 0,
-          rounds: 15,
-        }),
-      })
-
-      const data = await response.json()
-      if (currentConversationIdRef.current === conversationId) {
-        if (response.ok && data.messages) {
-          const normalized = sortMessages(data.messages.map(normalizeMessage))
-          setMessages(normalized)
-          setCurrentCursorRounds(data.nextCursorRounds ?? null)
-        }
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            const container = messagesContainerRef.current
-            if (container) {
-              container.scrollTop = container.scrollHeight
-            }
-          })
-        })
-      }
+      // 传入 0 作为 cursorRounds，表示获取最新消息
+      await fetchConversationMessages(realId, 0, 'replace')
     } catch (error) {
       console.error('加载对话历史失败:', error)
     } finally {
@@ -672,7 +656,7 @@ function ChatPageContent() {
     requestScrollToBottom,
     restoreConversationState,
     saveCurrentConversationState,
-    user?.id,
+    fetchConversationMessages // 添加依赖
   ])
 
   useEffect(() => {
