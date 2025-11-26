@@ -1213,9 +1213,16 @@ function ChatPageContent() {
       `}>
         <div className="absolute inset-0 bg-black/50 md:hidden" onClick={() => setMobileMenuOpen(false)} />
         <div className={`
-          relative w-72 md:w-auto h-full bg-slate-50/80 backdrop-blur-xl border-r border-white/20 flex flex-col shadow-2xl md:shadow-none z-10
+          relative h-full bg-slate-50/80 backdrop-blur-xl border-r border-white/20 flex flex-col shadow-2xl md:shadow-none z-10
           md:transition-all md:duration-300
-        `} style={{ width: window.innerWidth >= 768 ? (leftSidebarCollapsed ? 72 : 260) : 280 }}>
+        `} style={{ 
+          width: typeof window !== 'undefined' && window.innerWidth >= 768 
+            ? (leftSidebarCollapsed ? '72px' : 'fit-content') 
+            : '280px',
+          minWidth: typeof window !== 'undefined' && window.innerWidth >= 768 && !leftSidebarCollapsed 
+            ? '220px' 
+            : undefined 
+        }}>
           
           {/* Sidebar Header */}
           <div className="p-4 flex items-center justify-between h-16">
@@ -1264,7 +1271,7 @@ function ChatPageContent() {
                     className={`w-10 h-10 rounded-xl object-cover flex-shrink-0 transition-transform duration-300 ${isActive ? 'scale-110' : ''}`}
                   />
                   {!leftSidebarCollapsed && (
-                    <span className={`relative text-sm font-medium truncate flex-1 text-left animate-fade-in ${isActive ? 'text-slate-800' : ''}`}>
+                    <span className={`relative text-sm font-medium truncate flex-1 text-left animate-fade-in max-w-[160px] whitespace-nowrap ${isActive ? 'text-slate-800' : ''}`}>
                       {assistant.name}
                     </span>
                   )}
